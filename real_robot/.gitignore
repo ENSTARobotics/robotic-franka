@@ -6,3 +6,5 @@ __pycache__/
 *.pyc
 # Entorno de Python de la percepción
 .venv/
+# Modelos de voz de dialogo.py (~130 MB): se bajan con dialogo/descargar_modelos.py
+dialogo/modelos/

@@ -34,8 +34,12 @@ percepcion/               se ejecuta en el host (necesita .venv con OpenCV y PyT
   mini_xception.py          la red del TD4 ROB311 del equipo, pasada de Keras a PyTorch
   convertir_pesos.py        conversión Keras -> PyTorch verificada (sólo para rehacerla; usa TensorFlow)
   modelos/                  YuNet, mini-Xception (Keras y .pt), voz_ravdess_scratch.pt; licencias
+  detectar_aruco.py         dice el diccionario y los ids de los ArUco de una foto
 pantalla/                 se ejecuta en el host
   pantalla.py               pantalla del operador: cámara, expresión de cara y voz, estado y robot
+dialogo/                  se ejecuta en el host
+  dialogo.py                el robot habla en inglés (Piper) y entiende palabras clave (Vosk)
+  descargar_modelos.py      baja la voz de Piper y el modelo de Vosk a dialogo/modelos/ (fuera de git)
 datos/                    poses.json (rad), poses_info.json (posición de la punta y esquinas
                           de la placa), mesa.json (ArUco de la mesa, marco de la base)
 logs/                     CSV de cada sesión (fuera de git)
@@ -88,10 +92,23 @@ python3 -m venv .venv && .venv/bin/pip install numpy==2.3.1 opencv-python==4.13.
 .venv/bin/python percepcion/voz.py                    # micrófono -> estrés (--dispositivo C920)
 python3 supervisor/supervisor.py --v-normal 0.6 --v-cautious 0.3
 .venv/bin/python pantalla/pantalla.py                 # --completa en el monitor del operador
+.venv/bin/python dialogo/dialogo.py                   # voz del robot (antes: pip install piper-tts vosk
+                                                      #  y python3 dialogo/descargar_modelos.py)
 ```
 
 Puertos UDP (todos en 127.0.0.1): 5005 supervisor -> robot, 5006 robot -> supervisor,
-5010 sensores -> supervisor, 5011 supervisor -> pantalla, 5012 cámara anotada -> pantalla.
+5010 sensores -> supervisor, 5011 supervisor -> pantalla, 5012 cámara anotada -> pantalla,
+5013 dialogo -> supervisor (órdenes de voz), 5014 supervisor -> dialogo.
+
+### Voz del robot (dialogo.py)
+
+Saluda y pregunta si empezamos ("Welcome! ... Shall we begin?"): *yes/ready* = modo automático,
+*no* = espera. Durante la tarea: *stop/wait/pause* para al momento ("Stopping. Sorry if I was
+going too fast." + "Shall I continue?"); *slow down* = más lento 20 s; y avisa de lo que decide
+la confianza ("I noticed some tension, so I'm slowing down", "Back to normal speed"...).
+Mientras habla, el micrófono se ignora (no se oye a sí mismo). Micrófono y altavoz: los del
+sistema (PipeWire); voz.py y dialogo.py pueden compartir el micrófono. **"stop" por voz es un
+canal adicional: el paro de emergencia sigue siendo el principal.**
 
 Cada sensor envía a UDP 5010 `{"fuente": "rostro"|"audio", "estres": 0..1, "confianza": 0..1}`.
 Estrés de una expresión (cara y voz, mismos pesos): miedo, enfado y asco 1; tristeza 0.6;

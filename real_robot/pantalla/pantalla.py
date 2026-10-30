@@ -40,6 +40,7 @@ MENSAJE = {
     ("CAUTIOUS", "tension"): "Voy más lento: noto tensión",
     ("CAUTIOUS", "sin_percepcion"): "Voy más lento: no te veo ni te oigo bien",
     ("CAUTIOUS", "calma"): "Te noto más tranquilo: voy retomando",
+    ("CAUTIOUS", "voz"): "Voy más lento, como me pediste",
     ("PAUSED", "estres_alto"): "Me detuve: noto estrés. Tómate un momento",
     ("PAUSED", "inicio"): "Listo para empezar",
     ("NORMAL", "manual"): "Velocidad normal",

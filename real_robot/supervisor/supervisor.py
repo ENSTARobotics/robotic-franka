@@ -6,6 +6,8 @@
 Recibe la percepción (rostro.py, voz.py) en UDP 5010, calcula T(t) y la máquina de estados
 de confianza.py, y manda el estado al controlador por UDP 5005, igual que
 supervisor_teclado.py. Envía un resumen a pantalla.py por UDP 5011.
+Órdenes de voz de dialogo.py (UDP 5013): empezar = a; pausa = p; lento = CAUTIOUS 20 s;
+seguir = automático desde CAUTIOUS 20 s. Mientras el robot habla, ignora la emoción de la voz.
 Teclas:  a = AUTOMÁTICO (el estado lo decide T(t))
          n / c / p / r = MANUAL: NORMAL / CAUTIOUS / PAUSED / RETRACT (anulan el automático)
          q = salir
@@ -30,7 +32,11 @@ PUERTO_CMD = 5005
 PUERTO_ESTADO = 5006
 PUERTO_PERCEPCION = 5010
 PUERTO_PANEL = 5011         # resumen para pantalla.py
+PUERTO_COMANDOS = 5013      # órdenes de dialogo.py (voz)
+PUERTO_DIALOGO = 5014       # resumen para dialogo.py
 HZ_PANEL = 10.0
+MARGEN_ECO = 0.5            # s tras hablar el robot en que se ignora la emoción de la voz
+S_VOZ_LENTO = 20.0          # s que dura un "slow down" / "continue" por voz antes de poder subir
 HZ = 20.0
 HZ_PANTALLA = 5.0           # redibujados por segundo como máximo (el envío UDP sigue a HZ)
 TIMEOUT_ROBOT = 0.5
@@ -90,6 +96,10 @@ def main():
     sock_perc = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock_perc.bind((IP, PUERTO_PERCEPCION))
     sock_perc.setblocking(False)
+    sock_voz = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock_voz.bind((IP, PUERTO_COMANDOS))
+    sock_voz.setblocking(False)
+    silencio_audio_hasta = 0.0
 
     confianza, fsm = Confianza(), MaquinaEstados()
     modo, manual = "MANUAL", "PAUSED"
@@ -129,8 +139,33 @@ def main():
                 elif tecla.strip():
                     linea("[tecla %r] no reconocida (a, n, c, p, r, q)" % tecla)
 
+            # Órdenes de voz (dialogo.py); se registran en la columna "tecla" como voz:<orden>
+            for m in leer_todo(sock_voz):
+                orden = m.get("comando")
+                if orden == "hablando":
+                    silencio_audio_hasta = float(m.get("hasta", 0.0)) + MARGEN_ECO
+                    continue
+                if orden == "empezar":
+                    modo = "AUTO"
+                elif orden == "pausa":
+                    modo, manual = "MANUAL", "PAUSED"
+                elif orden == "seguir":
+                    modo = "AUTO"
+                    fsm.forzar("CAUTIOUS", "voz", S_VOZ_LENTO, t_tick)
+                elif orden == "lento":
+                    if modo == "AUTO":
+                        fsm.forzar("CAUTIOUS", "voz", S_VOZ_LENTO, t_tick)
+                    else:
+                        manual = "CAUTIOUS"
+                else:
+                    continue
+                tecla = "voz:" + orden
+                linea("[voz] %s -> modo %s, %s" % (orden, modo, color(fsm.estado if modo == "AUTO" else manual)))
+
             # Percepción -> T(t) -> máquina de estados (corre siempre, también en manual)
             for m in leer_todo(sock_perc):
+                if m.get("fuente") == "audio" and t_tick < silencio_audio_hasta:
+                    continue                    # es el robot hablando, no el operador
                 confianza.recibir(m, t_tick)
             T = confianza.actualizar(t_tick)
             sin_datos = confianza.sin_datos(t_tick)
@@ -169,7 +204,8 @@ def main():
                                    "segment": robot.get("segment", ""), "action": robot.get("action", ""),
                                    "seg_index": robot.get("seg_index", 0), "n_segments": robot.get("n_segments", 0),
                                    "done": robot.get("done", False)}}
-                sock_cmd.sendto(json.dumps(panel).encode("utf-8"), (IP, PUERTO_PANEL))
+                for puerto in (PUERTO_PANEL, PUERTO_DIALOGO):
+                    sock_cmd.sendto(json.dumps(panel).encode("utf-8"), (IP, puerto))
 
             # Pantalla del terminal
             fuentes_txt = []

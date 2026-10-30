@@ -80,8 +80,17 @@ class MaquinaEstados(object):
         self.estado = "PAUSED"
         self.motivo = "inicio"
         self.causa = "inicio"       # código para la pantalla: inicio, tension, estres_alto,
-                                    # sin_percepcion, calma
+                                    # sin_percepcion, calma, voz
         self._desde_calma = None    # desde cuándo T permite subir de estado
+        self._sin_subir_hasta = 0.0  # tras forzar(): no subir de estado antes de esto
+
+    def forzar(self, estado, causa, segundos, ahora=None):
+        """Estado pedido desde fuera (p. ej. "slow down" por voz) que no sube antes de `segundos`.
+        Bajar sigue siendo posible: si T cae, la máquina pasa a PAUSED igualmente."""
+        ahora = time.time() if ahora is None else ahora
+        self.estado, self.causa, self.motivo = estado, causa, "pedido por %s" % causa
+        self._sin_subir_hasta = ahora + segundos
+        self._desde_calma = None
 
     def actualizar(self, T, sin_datos, ahora=None):
         ahora = time.time() if ahora is None else ahora
@@ -102,7 +111,7 @@ class MaquinaEstados(object):
             umbral, espera, siguiente = {"PAUSED": (T_REANUDAR, S_REANUDAR, "CAUTIOUS"),
                                          "CAUTIOUS": (T_NORMAL, S_NORMAL, "NORMAL")}.get(
                                              self.estado, (None, None, None))
-            if umbral is not None and T > umbral:
+            if umbral is not None and T > umbral and ahora >= self._sin_subir_hasta:
                 if self._desde_calma is None:
                     self._desde_calma = ahora
                 elif ahora - self._desde_calma >= espera:
