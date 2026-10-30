@@ -1,0 +1,7 @@
+voz_ravdess_scratch.pt: CNN "scratch" de https://github.com/JairVasquezT/voice-emotion-recognition
+(Jair Vasquez y Lucas Barbosa), entrenada con entrenar_ravdess.py sobre RAVDESS (voz hablada,
+24 actores, "calm" unido a "neutral"). UAR 70.4 % +- 5.3 con validación por actores no vistos.
+
+RAVDESS: Livingstone SR, Russo FA (2018) The Ryerson Audio-Visual Database of Emotional Speech
+and Song (RAVDESS). PLoS ONE 13(5): e0196391. https://doi.org/10.1371/journal.pone.0196391
+Licencia de los datos: CC BY-NC-SA 4.0 (uso no comercial, citando la fuente).

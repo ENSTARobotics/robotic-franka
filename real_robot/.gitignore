@@ -4,3 +4,5 @@ logs/
 datos/*.bak-*
 __pycache__/
 *.pyc
+# Entorno de Python de la percepción
+.venv/

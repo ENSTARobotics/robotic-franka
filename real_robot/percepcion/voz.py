@@ -1,0 +1,216 @@
+#!/usr/bin/env python3
+"""Estrés del operador a partir de la voz (micrófono) -> UDP al supervisor. Se ejecuta en el host.
+
+    python3 voz.py                        # micrófono por defecto del sistema
+    python3 voz.py --dispositivo C920     # micrófono de la webcam (por nombre o índice)
+    python3 voz.py --listar               # ver los micrófonos disponibles
+    python3 voz.py --wav prueba.wav       # prueba con un archivo (sin micrófono)
+
+CNN "scratch" del proyecto voice-emotion-recognition (Jair y Lucas, curso de Aprendizaje
+para la robótica), reentrenada con RAVDESS en inglés (entrenar_ravdess.py), en la GPU.
+Cada 0.25 s analiza los últimos 3 s (log-mel 64 x 301, igual que en el entrenamiento) y
+envía a UDP 5010:
+    {"t": .., "fuente": "audio", "estres": 0..1 o null, "confianza": 0..1,
+     "etiqueta": "fearful", "probs": {..}, "voz": 0.8}
+"voz" es la fracción de la ventana con voz. Si casi no hay voz: estres null y confianza 0
+(el supervisor la ignora). Los primeros 2 s mide el ruido de fondo: quédate en silencio.
+
+Ojo: RAVDESS son actores leyendo dos frases en inglés en un estudio; con voz espontánea,
+otro idioma y el ruido del laboratorio la exactitud será menor. Por eso se envía la confianza.
+"""
+import argparse
+import json
+import math
+import os
+import socket
+import sys
+import time
+
+import numpy as np
+
+DIR_MODELOS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "modelos")
+IP = "127.0.0.1"
+PUERTO_PERCEPCION = 5010
+HZ = 4.0
+
+# Mismos parámetros que el entrenamiento (EmotionDetection.ipynb / entrenar_ravdess.py)
+SR, N_SAMPLES, WIN, HOP, N_FFT, N_MELS = 16000, 3 * 16000, 400, 160, 512, 64
+# Cuánto aporta cada emoción al estrés: los mismos pesos que el rostro (FER-2013)
+PESO_ESTRES = {"angry": 1.0, "disgust": 1.0, "fearful": 1.0, "sad": 0.6,
+               "surprised": 0.5, "happy": 0.0, "neutral": 0.0}
+CALIBRACION_S = 2.0         # s iniciales para medir el ruido de fondo
+MARGEN_VOZ_DB = 12.0        # una trama es voz si supera el ruido de fondo en tantos dB
+VOZ_MIN = 0.25              # fracción mínima de voz en la ventana para clasificar
+
+
+def conv_block(cin, cout):
+    import torch.nn as nn
+    return nn.Sequential(
+        nn.Conv2d(cin, cout, 3, padding=1), nn.BatchNorm2d(cout), nn.ReLU(inplace=True),
+        nn.Conv2d(cout, cout, 3, padding=1), nn.BatchNorm2d(cout), nn.ReLU(inplace=True),
+        nn.MaxPool2d(2))
+
+
+def cargar_red(ruta, dispositivo):
+    """ScratchCNN del notebook (arquitectura idéntica) con el checkpoint de RAVDESS."""
+    import torch
+    import torch.nn as nn
+
+    class ScratchCNN(nn.Module):
+        def __init__(self, n_classes):
+            super().__init__()
+            self.features = nn.Sequential(conv_block(1, 32), conv_block(32, 64),
+                                          conv_block(64, 128), conv_block(128, 256))
+            self.head = nn.Sequential(nn.AdaptiveAvgPool2d(1), nn.Flatten(),
+                                      nn.Dropout(0.3), nn.Linear(256, n_classes))
+
+        def forward(self, x):
+            return self.head(self.features(x))
+
+    ck = torch.load(ruta, map_location="cpu", weights_only=False)
+    red = ScratchCNN(len(ck["classes"]))
+    red.load_state_dict(ck["model"])
+    return red.to(dispositivo).eval(), ck["mu"], ck["sd"], ck["classes"]
+
+
+def logmel(x):
+    """Igual que wav_to_logmel del entrenamiento: pico a 1, 3 s centrales, log-mel 64 x 301."""
+    import librosa
+    x = x.astype(np.float32)
+    x = x / (np.abs(x).max() + 1e-9)
+    if len(x) < N_SAMPLES:
+        x = np.pad(x, (0, N_SAMPLES - len(x)))
+    else:
+        s = (len(x) - N_SAMPLES) // 2
+        x = x[s:s + N_SAMPLES]
+    S = librosa.feature.melspectrogram(y=x, sr=SR, n_fft=N_FFT, win_length=WIN,
+                                       hop_length=HOP, n_mels=N_MELS)
+    return librosa.power_to_db(S, ref=1.0).astype(np.float32)
+
+
+def energia_db(x, trama=WIN):
+    """Energía en dB de tramas de 25 ms."""
+    n = len(x) // trama
+    if n == 0:
+        return np.array([-120.0])
+    tramas = x[:n * trama].reshape(n, trama)
+    return 10 * np.log10(np.mean(tramas ** 2, axis=1) + 1e-12)
+
+
+def estres_y_confianza(p, clases, fraccion_voz):
+    estres = float(sum(PESO_ESTRES.get(c, 0.0) * float(pi) for c, pi in zip(clases, p)))
+    entropia = -sum(float(pi) * math.log(float(pi)) for pi in p if pi > 1e-9)
+    nitidez = max(0.0, 1.0 - entropia / math.log(len(clases)))
+    # Menos voz en la ventana = menos fiable
+    return min(1.0, max(0.0, estres)), nitidez * min(1.0, fraccion_voz / 0.5)
+
+
+class Clasificador(object):
+    def __init__(self, dispositivo):
+        import torch
+        self.torch = torch
+        self.dispositivo = dispositivo
+        self.red, self.mu, self.sd, self.clases = cargar_red(
+            os.path.join(DIR_MODELOS, "voz_ravdess_scratch.pt"), dispositivo)
+        self.probabilidades(np.zeros(N_SAMPLES, np.float32))      # calentar
+
+    def probabilidades(self, x16k):
+        m = (logmel(x16k) - self.mu) / self.sd
+        t = self.torch.from_numpy(m)[None, None].to(self.dispositivo)
+        with self.torch.no_grad():
+            return self.torch.softmax(self.red(t), dim=1)[0].cpu().numpy()
+
+
+def analizar(x16k, ruido_db, clf):
+    """Mensaje para el supervisor a partir de los últimos 3 s a 16 kHz."""
+    fraccion = float(np.mean(energia_db(x16k) > ruido_db + MARGEN_VOZ_DB))
+    mensaje = {"t": time.time(), "fuente": "audio", "estres": None, "confianza": 0.0,
+               "etiqueta": "", "probs": {}, "voz": round(fraccion, 2)}
+    if fraccion >= VOZ_MIN:
+        p = clf.probabilidades(x16k)
+        mensaje["estres"], mensaje["confianza"] = estres_y_confianza(p, clf.clases, fraccion)
+        mensaje["etiqueta"] = clf.clases[int(np.argmax(p))]
+        mensaje["probs"] = {c: round(float(pi), 3) for c, pi in zip(clf.clases, p)}
+    return mensaje
+
+
+def imprimir(mensaje):
+    if mensaje["estres"] is None:
+        sys.stdout.write("\r\033[Ksilencio (voz %.0f%%)" % (100 * mensaje["voz"]))
+    else:
+        sys.stdout.write("\r\033[K%-9s estres %.2f  confianza %.2f  (voz %.0f%%)"
+                         % (mensaje["etiqueta"], mensaje["estres"], mensaje["confianza"], 100 * mensaje["voz"]))
+    sys.stdout.flush()
+
+
+def main():
+    p = argparse.ArgumentParser(description="Estrés por la voz -> UDP al supervisor")
+    p.add_argument("--dispositivo", help="micrófono: índice o parte del nombre (p. ej. C920)")
+    p.add_argument("--listar", action="store_true", help="listar micrófonos y salir")
+    p.add_argument("--wav", help="analizar un archivo en vez del micrófono (pruebas)")
+    p.add_argument("--hz", type=float, default=HZ)
+    p.add_argument("--cpu", action="store_true", help="usar la CPU aunque haya GPU")
+    args = p.parse_args()
+
+    import sounddevice as sd
+    if args.listar:
+        print(sd.query_devices())
+        return
+    import librosa
+    import torch
+    if args.cpu:
+        dispositivo = "cpu"
+    elif torch.cuda.is_available():
+        dispositivo = "cuda"
+    else:
+        sys.exit("[error] PyTorch no ve la GPU (CUDA). Revisa el driver de NVIDIA o usa --cpu.")
+    clf = Clasificador(dispositivo)
+    print("CNN de voz (RAVDESS, %d clases) en %s"
+          % (len(clf.clases), torch.cuda.get_device_name(0) if dispositivo == "cuda" else "CPU"))
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+    if args.wav:
+        x, _ = librosa.load(args.wav, sr=SR, mono=True)
+        ruido = float(np.percentile(energia_db(x), 10))
+        mensaje = analizar(x, ruido, clf)
+        sock.sendto(json.dumps(mensaje).encode("utf-8"), (IP, PUERTO_PERCEPCION))
+        imprimir(mensaje)
+        print("\nprobabilidades: %s" % mensaje["probs"])
+        return
+
+    disp = int(args.dispositivo) if args.dispositivo and args.dispositivo.isdigit() else args.dispositivo
+    sr_mic = int(sd.query_devices(disp, "input")["default_samplerate"])
+    bufer = np.zeros(int(3 * sr_mic), np.float32)          # últimos 3 s a la frecuencia del micro
+    t_inicio = time.time()
+    ruido_db, muestras_ruido = None, []
+    print("Micrófono: %s (%d Hz). Silencio %.0f s para medir el ruido de fondo..."
+          % (sd.query_devices(disp, "input")["name"], sr_mic, CALIBRACION_S))
+
+    with sd.InputStream(device=disp, channels=1, samplerate=sr_mic, dtype="float32") as flujo:
+        print("Enviando a %s:%d a %.0f Hz. Ctrl+C para salir." % (IP, PUERTO_PERCEPCION, args.hz))
+        try:
+            while True:
+                t_tick = time.time()
+                datos, _ = flujo.read(flujo.read_available or 1)
+                n = len(datos)
+                bufer = np.concatenate([bufer[n:], datos[:, 0]]) if n < len(bufer) else datos[-len(bufer):, 0]
+                x16k = librosa.resample(bufer, orig_sr=sr_mic, target_sr=SR)
+
+                if ruido_db is None:
+                    muestras_ruido.append(energia_db(x16k[-int(SR / args.hz):]))
+                    if time.time() - t_inicio >= CALIBRACION_S:
+                        ruido_db = float(np.percentile(np.concatenate(muestras_ruido), 50))
+                        print("ruido de fondo: %.1f dB. Ya puedes hablar." % ruido_db)
+                    mensaje = {"t": time.time(), "fuente": "audio", "estres": None, "confianza": 0.0,
+                               "etiqueta": "", "probs": {}, "voz": 0.0}
+                else:
+                    mensaje = analizar(x16k, ruido_db, clf)
+                    imprimir(mensaje)
+                sock.sendto(json.dumps(mensaje).encode("utf-8"), (IP, PUERTO_PERCEPCION))
+                time.sleep(max(0.0, 1.0 / args.hz - (time.time() - t_tick)))
+        except KeyboardInterrupt:
+            print("\nvoz cerrada")
+
+
+if __name__ == "__main__":
+    main()

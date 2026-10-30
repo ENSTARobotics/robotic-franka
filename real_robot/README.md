@@ -26,6 +26,16 @@ robot/                    se ejecuta en el contenedor con frankapy
   ejemplos/move_robot.py    ejemplo de frankapy
 supervisor/               se ejecuta en el host
   supervisor_teclado.py     teclas -> estado; muestra el estado del robot y guarda un CSV
+  supervisor.py             percepción -> T(t) -> estado (modo automático) + teclas manuales
+  confianza.py              fusión de sensores en T(t) y máquina de estados (umbrales aquí)
+percepcion/               se ejecuta en el host (necesita .venv con OpenCV y PyTorch+CUDA)
+  rostro.py                 webcam -> YuNet + mini-Xception (GPU) -> estrés y confianza -> UDP 5010
+  voz.py                    micrófono -> CNN log-mel (RAVDESS, inglés; GPU) -> estrés y confianza -> UDP 5010
+  mini_xception.py          la red del TD4 ROB311 del equipo, pasada de Keras a PyTorch
+  convertir_pesos.py        conversión Keras -> PyTorch verificada (sólo para rehacerla; usa TensorFlow)
+  modelos/                  YuNet, mini-Xception (Keras y .pt), voz_ravdess_scratch.pt; licencias
+pantalla/                 se ejecuta en el host
+  pantalla.py               pantalla del operador: cámara, expresión de cara y voz, estado y robot
 datos/                    poses.json (rad), poses_info.json (posición de la punta y esquinas
                           de la placa), mesa.json (ArUco de la mesa, marco de la base)
 logs/                     CSV de cada sesión (fuera de git)
@@ -62,6 +72,40 @@ Pulsa Enter en el controlador y `n` en el supervisor:
 Seguridad: si el controlador no recibe un comando válido en 0.5 s, se para (nunca sigue).
 `--escala-max` del controlador recorta la velocidad que pida el supervisor (por defecto 0.3,
 para las primeras pruebas); tiene que ser al menos `--v-normal` o los modos se igualan.
+
+### Modo automático: la confianza del operador decide
+
+```bash
+# host, una vez: entorno para la percepción (PyTorch con CUDA 12.6: la última serie con
+# soporte para GPUs Pascal como la GTX 1050 Ti; necesita sudo apt install python3.12-venv)
+python3 -m venv .venv && .venv/bin/pip install numpy==2.3.1 opencv-python==4.13.0.92
+.venv/bin/pip install torch==2.14.1+cu126 --index-url https://download.pytorch.org/whl/cu126
+
+.venv/bin/pip install librosa sounddevice    # para la voz
+
+# host, una terminal cada uno
+.venv/bin/python percepcion/rostro.py                 # cámara -> estrés (--camara N, --ver)
+.venv/bin/python percepcion/voz.py                    # micrófono -> estrés (--dispositivo C920)
+python3 supervisor/supervisor.py --v-normal 0.6 --v-cautious 0.3
+.venv/bin/python pantalla/pantalla.py                 # --completa en el monitor del operador
+```
+
+Puertos UDP (todos en 127.0.0.1): 5005 supervisor -> robot, 5006 robot -> supervisor,
+5010 sensores -> supervisor, 5011 supervisor -> pantalla, 5012 cámara anotada -> pantalla.
+
+Cada sensor envía a UDP 5010 `{"fuente": "rostro"|"audio", "estres": 0..1, "confianza": 0..1}`.
+Estrés de una expresión (cara y voz, mismos pesos): miedo, enfado y asco 1; tristeza 0.6;
+sorpresa 0.5; alegría y neutral 0. Confianza = 1 - entropía normalizada de la red (la voz,
+además, por la fracción de la ventana con voz).
+
+Modelos: cara, mini-Xception del TD4 ROB311 del equipo (FER-2013, 61 % de exactitud); voz, CNN
+del proyecto [voice-emotion-recognition](https://github.com/JairVasquezT/voice-emotion-recognition)
+reentrenada con RAVDESS (inglés): UAR 70.4 % ± 5.3 con actores no vistos (neutral 83 %,
+enfado 85 %, miedo 73 %). Son corpus actuados: con voz y caras espontáneas rinden menos.
+El supervisor hace la media del estrés ponderada por confianza, `T(t) = 1 - estrés` (suavizado),
+y la máquina de estados: baja al momento (T < 0.6 CAUTIOUS, T < 0.35 PAUSED) y sube sólo tras
+2-3 s de calma; sin percepción válida más de 2 s, como mucho CAUTIOUS. Arranca en MANUAL y
+PAUSED: `a` activa el modo automático; `n`/`c`/`p`/`r` toman el control manual al momento.
 
 Revisar el plan de la placa sin mover nada: `python3 robot/plan_placa.py`.
 Probar sin robot: `python3 robot/controlador_ciclo.py --simulado --placa` (brazo falso).
