@@ -26,5 +26,5 @@
     "2"
   ],
   "lado_aruco_m": 0.048,
-  "diccionario_aruco": "por confirmar (Lucas usa DICT_4X4_50)"
+  "diccionario_aruco": "DICT_4X4_50"
 }
