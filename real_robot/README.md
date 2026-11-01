@@ -80,20 +80,18 @@ para las primeras pruebas); tiene que ser al menos `--v-normal` o los modos se i
 ### Modo automático: la confianza del operador decide
 
 ```bash
-# host, una vez: entorno para la percepción (PyTorch con CUDA 12.6: la última serie con
-# soporte para GPUs Pascal como la GTX 1050 Ti; necesita sudo apt install python3.12-venv)
-python3 -m venv .venv && .venv/bin/pip install numpy==2.3.1 opencv-python==4.13.0.92
-.venv/bin/pip install torch==2.14.1+cu126 --index-url https://download.pytorch.org/whl/cu126
+# host, una vez (ver PUESTA_EN_MARCHA.md, sección 4)
+sudo apt install python3.12-venv libportaudio2
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+.venv/bin/python dialogo/descargar_modelos.py
 
-.venv/bin/pip install librosa sounddevice    # para la voz
 
 # host, una terminal cada uno
 .venv/bin/python percepcion/rostro.py                 # cámara -> estrés (--camara N, --ver)
 .venv/bin/python percepcion/voz.py                    # micrófono -> estrés (--dispositivo C920)
 python3 supervisor/supervisor.py --v-normal 0.6 --v-cautious 0.3
 .venv/bin/python pantalla/pantalla.py                 # --completa en el monitor del operador
-.venv/bin/python dialogo/dialogo.py                   # voz del robot (antes: pip install piper-tts vosk
-                                                      #  y python3 dialogo/descargar_modelos.py)
+.venv/bin/python dialogo/dialogo.py                   # voz del robot
 ```
 
 Puertos UDP (todos en 127.0.0.1): 5005 supervisor -> robot, 5006 robot -> supervisor,

@@ -1,0 +1,15 @@
+# Programas del host: percepción (cara y voz), pantalla y diálogo. Probado con Python 3.12.
+#   python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+# supervisor/ no necesita nada de esto y robot/ corre en el contenedor Docker.
+#
+# PyTorch para CUDA 12.6: última serie que funciona con GPUs Pascal como la GTX 1050 Ti. Sin GPU
+# NVIDIA también se instala: lanza rostro.py y voz.py con --cpu.
+--extra-index-url https://download.pytorch.org/whl/cu126
+torch==2.14.1+cu126
+numpy==2.3.1
+opencv-python==4.13.0.92
+librosa==1.0.0
+sounddevice==0.5.6
+pillow==13.0.0
+piper-tts==1.8.0
+vosk==0.3.45

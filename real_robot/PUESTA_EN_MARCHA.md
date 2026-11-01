@@ -36,7 +36,14 @@ funciona. Para ver por qué interfaz sale el tráfico: `ip route get 147.250.35.
 
 Al terminar: desactivar la FCI y bloquear las articulaciones.
 
-## 3. Docker con frankapy (ROS 1)
+## 3. Código y Docker con frankapy (ROS 1)
+
+Baja el código en tu carpeta personal. Hasta que se acepten los PR, está en este fork:
+
+```bash
+sudo apt install git docker.io
+git clone -b feat/percepcion https://github.com/JairVasquezT/robotic-franka.git ~/robotic-franka
+```
 
 El Panda del laboratorio es un **FER**: no funciona con `franka_ros2`. Se usa la imagen del
 laboratorio con frankapy:
@@ -66,7 +73,21 @@ sudo docker start franka_container
 sudo docker exec -it franka_container bash      # una vez por cada terminal
 ```
 
-## 4. Arrancar el stack (dentro del contenedor)
+## 4. Programas del host (cara, voz, pantalla y diálogo)
+
+Sólo probado en Ubuntu 24.04 con Python 3.12. El supervisor no necesita nada de esto y el
+controlador corre en el contenedor. Sin GPU NVIDIA, lanza `rostro.py` y `voz.py` con `--cpu`.
+
+```bash
+sudo apt install python3.12-venv libportaudio2
+cd ~/robotic-franka/real_robot
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+.venv/bin/python dialogo/descargar_modelos.py
+.venv/bin/python -c "import cv2, torch, librosa, sounddevice, PIL, piper, vosk; print('CUDA:', torch.cuda.is_available())"
+```
+
+## 5. Arrancar el stack (dentro del contenedor)
 
 En **cada** terminal del contenedor:
 
@@ -88,7 +109,7 @@ Apagado: Ctrl+C en orden inverso (garra -> ros_interface -> franka_interface -> 
 Mensajes normales: `autolab_core not installed as catkin package`,
 `Will try to acquire lock while setting franka_interface status`.
 
-## 5. Probar
+## 6. Probar
 
 En una quinta terminal del contenedor, con la mano en el paro de emergencia:
 
@@ -98,6 +119,10 @@ python3 prueba_comunicacion.py 1      # gira la muñeca 20° y vuelve
 ```
 
 Si funciona, seguir con el `README.md` de esta carpeta (supervisor + controlador).
+
+Las poses y las esquinas de `datos/` son de nuestra mesa. Si la mesa o la placa se movieron, o si
+el bolígrafo cambió, vuelve a grabarlas (`robot/grabar_poses.py`) y revisa el plan
+(`python3 robot/plan_placa.py`).
 
 Notas:
 - `fa.get_gripper_width()` falla en este setup (también en `move_robot.py` del tutorial: hay
