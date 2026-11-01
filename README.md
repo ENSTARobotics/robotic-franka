@@ -1,141 +1,74 @@
-# Aided Building - base ROS 2 + Gazebo
+# Aided Building
 
-Base inicial do projeto **Human-Robot Collaborative Manual Soldering & Dynamic Trust Assessment** para um robô Franka. Nesta etapa o ambiente é totalmente simulado no Gazebo, a percepção é sintética e o pipeline de confiança e segurança já roda de ponta a ponta.
+**Human-Robot Collaborative Manual Soldering & Dynamic Trust Assessment.** HRI course project (Prof. Adriana Tapus).
 
-## Divisão do projeto
+A Franka Emika Panda performs a mock soldering task (a pen on a cardboard PCB, never a hot iron)
+next to a human operator. The system estimates the operator's stress from their face and voice,
+fuses it into a trust index `T(t)`, adapts the robot's speed or stops it, and explains on a screen
+and by voice what it is doing and why.
 
-O projeto será dividido em três frentes de trabalho:
+The code that runs on the lab's robot is in [`real_robot/`](real_robot/). To connect and install,
+follow [`real_robot/SETUP.md`](real_robot/SETUP.md).
 
-| Frente | Responsável | Escopo |
-| --- | --- | --- |
-| 1 | Gustavo | Planejamento e movimentação do robô |
-| 2 | Lucas | Captura de dados da mão do trabalhador e da posição da placa de trabalho |
-| 3 | Edilberto | Leitura da face com câmera adicional para capturar as expressões do operador |
+## Status (November 1, 2026)
 
-## Escopo desta base
+| Part | Status | Code |
+|---|---|---|
+| Robot control over UDP (speed, pause, vertical retreat, stop on lost link) | Works on the real robot | `real_robot/robot/` |
+| Soldering routine over a recorded PCB (grid of points, FK/IK) | Works on the real robot | `real_robot/robot/plan_placa.py` |
+| Keyboard supervisor with CSV logging | Works on the real robot | `real_robot/supervisor/supervisor_teclado.py` |
+| Facial expression to stress (GPU) | Tested with a live webcam, not yet driving the robot | `real_robot/percepcion/rostro.py` |
+| Voice emotion to stress (GPU), English model | Trained and tested on recorded audio, not yet with a live microphone | `real_robot/percepcion/voz.py` |
+| Trust index `T(t)` and NORMAL / CAUTIOUS / PAUSED state machine | Tested in simulation, not yet on the real robot | `real_robot/supervisor/` |
+| Operator screen | Tested in simulation, not yet on the real robot | `real_robot/pantalla/` |
+| Spoken dialogue and voice commands ("stop", "slow down") | Tested in simulation, not yet with a live microphone | `real_robot/dialogo/` |
+| Hand detection | ROS 2 package, not integrated with the real robot | `aided_building_ws/src/aided_building_hand_perception/` |
+| Gazebo simulation of an FR3 | Simulation only | `aided_building_ws/` |
 
-- Modelo Franka (FR3 por padrão) com ferramenta de solda acoplada.
-- Célula de trabalho no Gazebo com bancada, tapete ESD e PCB.
-- Percepção sintética publicando mãos, medo facial, estresse vocal e evento de retração.
-- Fusão multimodal do índice de confiança `T(t)`.
-- Máquina de estados de segurança `NORMAL -> CAUTIOUS -> PAUSED`.
-- Gate de movimento com `enabled`, `speed_scale` e `retract_tool` para o futuro planejador.
-- Visualização do robô e das mãos no RViz.
+Not built yet: hand distance as a trust input, smooth braking (`stop_skill()` stops abruptly),
+per-participant calibration, and the user study.
 
-Ainda não faz parte desta base: MoveIt 2, planejamento adaptativo real, percepção por câmera/áudio, aquisição de dados experimentais e controle em hardware.
+## Who did what
 
-## Requisitos
+| Member | Contribution | State |
+|---|---|---|
+| Jair Vasquez | Real-robot control with frankapy, UDP bridge, soldering routine and kinematics, trust index and state machine, operator screen, spoken dialogue, face and voice real-time integration, RAVDESS retraining of the voice model, setup guide | `real_robot/`: see the table above |
+| Lucas Emanuel | Hand detection with MediaPipe and ArUco calibration; voice CNN design and EmoDB training ([voice-emotion-recognition](https://github.com/JairVasquezT/voice-emotion-recognition)) | Hand detection needs ROS 2 and the robot's TF, so it is not integrated yet |
+| Gustavo | Initial ROS 2 and Gazebo base, `aided_building_comm`, description and bringup packages | Simulation of an FR3; does not drive the lab's Panda |
+| Edilberto | Gripper interface (`aided_building_gripper`) and `real.launch.py` | Gripper simulated in Gazebo; `real.launch.py` needs `franka_ros2`, which does not work with the lab's Panda |
 
-- Ubuntu 24.04
-- ROS 2 Jazzy
-- Gazebo Harmonic
-- `franka_ros2` (branch `jazzy`) e `franka_description`
-- `gz_ros2_control`, `ros_gz_sim` e `ros_gz_bridge`
+The facial expression model (mini-Xception on FER-2013) comes from a team ROB311 lab assignment; it
+was converted from Keras to PyTorch here.
 
-O ambiente recomendado é o Docker oficial do `franka_ros2`. Consulte a documentação oficial da Franka para a instalação completa, pois a compilação do `franka_ros2` depende de `libfranka` e de versões compatíveis do `franka_description`.
+## Why two software stacks
 
-## Instalação
+The lab's robot is a **Panda (FER), not an FR3**, and its libfranka version is incompatible with
+`franka_ros2`. So:
 
-```bash
-cd aided_building_ws
+- **`real_robot/`** runs on the robot: frankapy (ROS 1 Noetic) in the lab's Docker image, plus plain
+  Python programs on the host that talk over UDP.
+- **`aided_building_ws/`** is the original ROS 2 Jazzy workspace for Gazebo, with FR3 joint names. It
+  does not control the lab's robot. See [its README](aided_building_ws/README.md).
 
-vcs import src < dependencies.repos
-rosdep install --from-paths src --ignore-src -r -y
+Moving the supervisor to ROS 2 nodes, to join both stacks, is a possible later phase.
 
-colcon build --symlink-install
-source install/setup.bash
-```
-
-Caso os pacotes da Franka já estejam instalados como binários no seu ambiente, remova as entradas correspondentes de `dependencies.repos` ou ajuste o build para evitar duplicidade.
-
-## Execução
-
-```bash
-source install/setup.bash
-ros2 launch aided_building_bringup sim.launch.py scenario:=1
-```
-
-Opções úteis:
-
-```bash
-ros2 launch aided_building_bringup sim.launch.py scenario:=2
-ros2 launch aided_building_bringup sim.launch.py scenario:=3
-ros2 launch aided_building_bringup sim.launch.py use_rviz:=false
-```
-
-A configuração de controladores desta base usa os nomes de juntas do FR3. Para usar FP3 ou FER, é necessário criar um YAML de controladores correspondente antes de alterar `robot_type`.
-
-O cenário controla as posições sintéticas das mãos:
-
-| Cenário | Descrição |
-| --- | --- |
-| 1 | Duas mãos livres segurando a PCB |
-| 2 | Uma mão na borda; outra mão apoiada |
-| 3 | PCB em suporte com as mãos estabilizando |
-
-## Teste do pipeline
-
-Visualizar confiança e segurança:
-
-```bash
-ros2 topic echo /trust_state
-ros2 topic echo /safety_state
-ros2 topic echo /motion/enabled
-ros2 topic hz /human_state
-```
-
-Disparar uma retração sintética:
-
-```bash
-ros2 service call /synthetic_perception/trigger_retraction std_srvs/srv/Trigger "{}"
-```
-
-Após o evento, o índice de confiança deve cair, a segurança deve entrar em `CAUTIOUS` e o gate deve reduzir a velocidade para `0.2`. Em proximidade crítica ou confiança abaixo do limite de pausa, o estado vai para `PAUSED` e o movimento é desabilitado.
-
-## Estrutura
+## Repository layout
 
 ```text
-aided_building_ws/
-├── dependencies.repos
-├── docs/
-│   └── architecture.md
-└── src/
-    ├── aided_building_interfaces/   contratos de mensagens
-    ├── aided_building_description/  Franka + ferramenta de solda
-    ├── aided_building_perception/   percepção sintética
-    ├── aided_building_trust/        fusão multimodal da confiança
-    ├── aided_building_safety/       FSM de segurança
-    ├── aided_building_motion/       interface de arbitragem de movimento
-    └── aided_building_bringup/      launch, mundo Gazebo e RViz
+real_robot/              code for the lab's robot (see its README)
+  robot/                   controller, kinematics, pose recording (runs in Docker)
+  supervisor/              trust index, state machine, keyboard control
+  percepcion/              face and voice models
+  pantalla/                operator screen
+  dialogo/                 robot speech and voice commands
+  datos/                   recorded poses, PCB corners, ArUco positions
+aided_building_ws/       ROS 2 + Gazebo workspace (simulation)
+proj-idea.md             original project concept
 ```
 
-## Tópicos principais
+## Safety
 
-| Tópico | Tipo | Publicador |
-| --- | --- | --- |
-| `/human_state` | `aided_building_interfaces/msg/HumanState` | percepção |
-| `/trust_state` | `aided_building_interfaces/msg/TrustState` | fusão de confiança |
-| `/safety_state` | `aided_building_interfaces/msg/SafetyState` | supervisor de segurança |
-| `/motion/enabled` | `std_msgs/msg/Bool` | gate de movimento |
-| `/motion/speed_scale` | `std_msgs/msg/Float32` | gate de movimento |
-| `/motion/retract_tool` | `std_msgs/msg/Bool` | gate de movimento |
-| `/human_state_markers` | `visualization_msgs/msg/MarkerArray` | percepção |
-
-## Próximos passos
-
-1. Integrar MoveIt 2 com objetos de colisão dinâmicos para as mãos e a distância `D_safe(t)`.
-2. Substituir a percepção sintética por nós reais mantendo o mesmo contrato `HumanState`.
-3. Implementar planejamento adaptativo e retração vertical de 50 mm em `CAUTIOUS`.
-4. Adicionar logging sincronizado, métricas experimentais e gerenciamento dos três cenários.
-5. Integrar E-stop físico, limitação de força e validação conforme ISO/TS 15066 antes de qualquer teste com hardware.
-
-## Garra (Franka Hand)
-
-O pacote `aided_building_gripper` expõe `/franka_gripper/{homing,move,grasp,gripper_action,stop}`
-com a mesma interface no Gazebo (`sim_gripper_server`) e no robô real (`franka_gripper` oficial).
-O `sim.launch.py` já inicia a garra simulada (`start_gripper:=false` para desativar).
-Detalhes e limitações em `aided_building_ws/src/aided_building_gripper/README.md`.
-
-## Segurança
-
-Este repositório é uma base de simulação. Ele não substitui análise de risco, E-stop físico, limitação de força ou validação normativa. Nenhum teste com o robô real deve ser executado sem os dispositivos de segurança e a autorização correspondentes.
+This is a course prototype, not a certified system. Someone must hold the emergency stop whenever the
+robot is active. Voice "stop" is an additional channel, never the main one. Hand detection is not
+integrated, so the robot does **not** stop if a hand comes close. No validation against ISO/TS 15066
+has been done.
