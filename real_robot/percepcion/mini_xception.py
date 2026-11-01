@@ -1,7 +1,7 @@
-"""mini-Xception 48x48 en PyTorch, equivalente a la versión Keras del TD4 ROB311 del equipo.
+"""mini-Xception 48x48 en PyTorch, equivalente a la versión Keras del TD4 ROB311 de Joab.
 
 Arquitectura y pesos originales: Octavio Arriaga et al., MIT
-(https://github.com/oarriaga/face_classification); cabeza adaptada a 48x48 por el equipo.
+(https://github.com/oarriaga/face_classification); cabeza adaptada a 48x48 por Joab.
 Los pesos se convierten una vez desde Keras con convertir_pesos.py -> modelos/mini_xception_48.pt.
 
 Detalles para que coincida con Keras:

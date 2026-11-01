@@ -37,8 +37,8 @@ per-participant calibration, and the user study.
 | Gustavo | Initial ROS 2 and Gazebo base, `aided_building_comm`, description and bringup packages | Simulation of an FR3; does not drive the lab's Panda |
 | Edilberto | Gripper interface (`aided_building_gripper`) and `real.launch.py` | Gripper simulated in Gazebo; `real.launch.py` needs `franka_ros2`, which does not work with the lab's Panda |
 
-The facial expression model (mini-Xception on FER-2013) comes from a team ROB311 lab assignment; it
-was converted from Keras to PyTorch here.
+Joab built the facial expression recognition (mini-Xception on FER-2013, ROB311 lab); it was converted
+from Keras to PyTorch here.
 
 ## Why two software stacks
 

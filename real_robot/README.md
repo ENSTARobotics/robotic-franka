@@ -32,7 +32,7 @@ supervisor/               runs on the host
 percepcion/               runs on the host (needs .venv)
   rostro.py                 webcam -> YuNet + mini-Xception -> stress and confidence -> UDP 5010
   voz.py                    microphone -> log-mel CNN (RAVDESS) -> stress and confidence -> UDP 5010
-  mini_xception.py          the team's ROB311 network, converted from Keras to PyTorch
+  mini_xception.py          Joab's ROB311 network, converted from Keras to PyTorch
   convertir_pesos.py        verified Keras -> PyTorch conversion (only to redo it; needs TensorFlow)
   detectar_aruco.py         finds the dictionary and ids of the ArUco markers in a photo
   modelos/                  YuNet, mini-Xception, voice CNN and their licenses
@@ -103,7 +103,7 @@ point, to be tuned in a pilot.
 
 | Signal | Model | Dataset | Score |
 |---|---|---|---|
-| Face | mini-Xception (team's ROB311 lab) | FER-2013 | 61 % accuracy; confuses neutral with fear on sample faces |
+| Face | mini-Xception (Joab's ROB311 lab) | FER-2013 | 61 % accuracy; confuses neutral with fear on sample faces |
 | Voice | Log-mel CNN from [voice-emotion-recognition](https://github.com/JairVasquezT/voice-emotion-recognition) | RAVDESS, English | 70.4 % ± 5.3 UAR on unseen actors (neutral 83 %, anger 85 %, fear 73 %) |
 
 ## Robot speech (`dialogo.py`)

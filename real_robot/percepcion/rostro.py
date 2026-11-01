@@ -5,8 +5,8 @@
     python3 rostro.py --camara 2 --ver        # otra cámara
     python3 rostro.py --imagen foto.jpg       # prueba con una imagen fija (sin cámara)
 
-Detector YuNet (OpenCV) + mini-Xception (FER-2013, 7 expresiones) del TD4 de ROB311 del
-equipo ("face recognition": 61% de exactitud en PrivateTest), pasada a PyTorch y ejecutada
+Detector YuNet (OpenCV) + mini-Xception (FER-2013, 7 expresiones) del TD4 de ROB311 de
+Joab ("face recognition": 61% de exactitud en PrivateTest), pasada a PyTorch y ejecutada
 en la GPU con CUDA (--cpu para forzar la CPU).
 Envía a UDP 5010 unas 10 veces por segundo:
     {"t": .., "fuente": "rostro", "estres": 0..1 o null, "confianza": 0..1,
