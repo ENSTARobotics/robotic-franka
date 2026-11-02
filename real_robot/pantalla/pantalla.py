@@ -114,6 +114,11 @@ def seccion_fuente(d, x, y, titulo, datos, vacio):
                font=fuente(15), fill=GRIS)
         d.text((x, y + 70), "estrés", font=fuente(15), fill=GRIS)
         barra(d, x + 60, y + 72, 380, estres, color_estres(estres))
+    elif datos and datos.get("etiqueta"):             # último resultado, ya sin peso en la confianza
+        exp = EXPRESION.get(datos["etiqueta"].lower(), datos["etiqueta"])
+        d.text((x, y + 26), "%s (%s)" % (exp, vacio), font=fuente(26), fill=GRIS)
+        d.text((x, y + 70), "estrés", font=fuente(15), fill=GRIS)
+        barra(d, x + 60, y + 72, 380, float(datos.get("estres") or 0.0), GRIS)
     else:
         d.text((x, y + 26), vacio if datos else "sin señal", font=fuente(26), fill=GRIS)
         d.text((x, y + 70), "estrés", font=fuente(15), fill=GRIS)

@@ -93,6 +93,8 @@ answering *yes*) enables automatic mode; `n`, `c`, `p`, `r` take manual control 
   happiness, neutral 0.
 - Confidence is 1 minus the network's normalized entropy; for voice, also scaled by the share of the
   window that contains speech.
+- In silence, `voz.py` repeats its last result while its confidence fades to 0 over 5 s, so it stays visible
+  but stops counting. The background noise level is re-estimated continuously from the last 15 s.
 - The supervisor takes the confidence-weighted mean stress, and `T(t) = 1 - stress`, smoothed.
 
 **State machine.** It goes down at once (`T < 0.6` CAUTIOUS, `T < 0.35` PAUSED) and up only after 2-3 s of
@@ -104,7 +106,7 @@ point, to be tuned in a pilot.
 | Signal | Model | Dataset | Score |
 |---|---|---|---|
 | Face | mini-Xception (Joab's ROB311 lab) | FER-2013 | 61 % accuracy; confuses neutral with fear on sample faces |
-| Voice | Log-mel CNN from [voice-emotion-recognition](https://github.com/JairVasquezT/voice-emotion-recognition) | RAVDESS, English | 70.4 % ± 5.3 UAR on unseen actors (neutral 83 %, anger 85 %, fear 73 %) |
+| Voice | Log-mel CNN from [voice-emotion-recognition](https://github.com/JairVasquezT/voice-emotion-recognition), retrained with background noise | RAVDESS, English | About 66 % UAR on unseen actors at -60 to -20 dB noise (one fold of six). Without noise training it scored 70.4 % ± 5.3 on clean audio but called any room noise "disgust" |
 
 ## Robot speech (`dialogo.py`)
 

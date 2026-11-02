@@ -8,20 +8,22 @@
 
 CNN "scratch" del proyecto voice-emotion-recognition (Jair y Lucas, curso de Aprendizaje
 para la robótica), reentrenada con RAVDESS en inglés (entrenar_ravdess.py), en la GPU.
-Cada 0.25 s analiza los últimos 3 s (log-mel 64 x 301, igual que en el entrenamiento) y
+Cada 0.1 s analiza los últimos 3 s (log-mel 64 x 301, igual que en el entrenamiento) y
 envía a UDP 5010:
     {"t": .., "fuente": "audio", "estres": 0..1 o null, "confianza": 0..1,
      "etiqueta": "fearful", "probs": {..}, "voz": 0.8}
-"voz" es la fracción de la ventana con voz. Si casi no hay voz: estres null y confianza 0
-(el supervisor la ignora). Los primeros 2 s mide el ruido de fondo: quédate en silencio.
+"voz" es la fracción de la ventana con voz. En silencio repite el último resultado con
+"mantenido": true y su confianza bajando a 0 en 5 s: se sigue viendo, pero deja de contar. Los primeros 3 s mide el ruido de fondo: quédate en silencio.
 
 Ojo: RAVDESS son actores leyendo dos frases en inglés en un estudio; con voz espontánea,
 otro idioma y el ruido del laboratorio la exactitud será menor. Por eso se envía la confianza.
 """
 import argparse
+import collections
 import json
 import math
 import os
+import queue
 import socket
 import sys
 import time
@@ -31,17 +33,21 @@ import numpy as np
 DIR_MODELOS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "modelos")
 IP = "127.0.0.1"
 PUERTO_PERCEPCION = 5010
-HZ = 4.0
+HZ = 10.0
 
 # Mismos parámetros que el entrenamiento (EmotionDetection.ipynb / entrenar_ravdess.py)
 SR, N_SAMPLES, WIN, HOP, N_FFT, N_MELS = 16000, 3 * 16000, 400, 160, 512, 64
 # Cuánto aporta cada emoción al estrés: los mismos pesos que el rostro (FER-2013)
 PESO_ESTRES = {"angry": 1.0, "disgust": 1.0, "fearful": 1.0, "sad": 0.6,
                "surprised": 0.5, "happy": 0.0, "neutral": 0.0}
-CALIBRACION_S = 2.0         # s iniciales para medir el ruido de fondo
-MARGEN_VOZ_DB = 12.0        # una trama es voz si supera el ruido de fondo en tantos dB
-VOZ_MIN = 0.25              # fracción mínima de voz en la ventana para clasificar
-RUIDO_MAX_DB = -20.0        # un silencio por encima de esto es un micrófono saturado
+ARRANQUE_S = 1.0            # s iniciales que se descartan (ceros o transitorio al abrir el micro)
+CALIBRACION_S = 2.0         # s siguientes para medir el ruido de fondo
+MARGEN_VOZ_DB = 6.0         # una trama es voz si supera el ruido de fondo en tantos dB
+VOZ_MIN = 0.10              # fracción mínima de voz en la ventana (0.3 s de 3 s) para clasificar
+RUIDO_ALTO_DB = -30.0       # un silencio por encima de esto es un micrófono muy ruidoso
+RUIDO_MIN_DB = -100.0       # por debajo son ceros: no está llegando audio
+MANTENER_S = 5.0            # s de silencio en que el último resultado pierde su peso
+VENTANA_RUIDO_S = 15.0      # el ruido de fondo se reestima con los últimos segundos
 
 
 def conv_block(cin, cout):
@@ -98,6 +104,20 @@ def energia_db(x, trama=WIN):
     return 10 * np.log10(np.mean(tramas ** 2, axis=1) + 1e-12)
 
 
+class SueloRuido(object):
+    """Ruido de fondo: percentil 10 de la energía reciente. Sigue al micrófono si su nivel cambia
+    (al abrirlo suele estar más alto) y las pausas al hablar bastan para no confundirlo con voz."""
+
+    def __init__(self):
+        self.tramas = collections.deque(maxlen=int(VENTANA_RUIDO_S * SR / WIN))
+
+    def agregar(self, x16k):
+        self.tramas.extend(float(e) for e in energia_db(x16k - x16k.mean()) if e > RUIDO_MIN_DB)
+
+    def valor(self):
+        return float(np.percentile(self.tramas, 10)) if self.tramas else None
+
+
 def estres_y_confianza(p, clases, fraccion_voz):
     estres = float(sum(PESO_ESTRES.get(c, 0.0) * float(pi) for c, pi in zip(clases, p)))
     entropia = -sum(float(pi) * math.log(float(pi)) for pi in p if pi > 1e-9)
@@ -124,6 +144,7 @@ class Clasificador(object):
 
 def analizar(x16k, ruido_db, clf):
     """Mensaje para el supervisor a partir de los últimos 3 s a 16 kHz."""
+    x16k = x16k - x16k.mean()       # sin componente continua (algunos micros la tienen al abrirlos)
     fraccion = float(np.mean(energia_db(x16k) > ruido_db + MARGEN_VOZ_DB))
     mensaje = {"t": time.time(), "fuente": "audio", "estres": None, "confianza": 0.0,
                "etiqueta": "", "probs": {}, "voz": round(fraccion, 2)}
@@ -135,9 +156,20 @@ def analizar(x16k, ruido_db, clf):
     return mensaje
 
 
+def mantener(mensaje, ultimo, t_ultimo, ahora):
+    """En silencio, repite el último resultado con la confianza bajando hasta 0 en MANTENER_S."""
+    resto = max(0.0, 1.0 - (ahora - t_ultimo) / MANTENER_S)
+    mensaje.update(estres=ultimo["estres"], etiqueta=ultimo["etiqueta"], probs=ultimo["probs"],
+                   confianza=ultimo["confianza"] * resto, mantenido=True)
+    return mensaje
+
+
 def imprimir(mensaje):
     if mensaje["estres"] is None:
         sys.stdout.write("\r\033[Ksilencio (voz %.0f%%)" % (100 * mensaje["voz"]))
+    elif mensaje.get("mantenido"):
+        sys.stdout.write("\r\033[Ksilencio; último: %-9s estres %.2f  confianza %.2f"
+                         % (mensaje["etiqueta"], mensaje["estres"], mensaje["confianza"]))
     else:
         sys.stdout.write("\r\033[K%-9s estres %.2f  confianza %.2f  (voz %.0f%%)"
                          % (mensaje["etiqueta"], mensaje["estres"], mensaje["confianza"], 100 * mensaje["voz"]))
@@ -182,35 +214,56 @@ def main():
     disp = int(args.dispositivo) if args.dispositivo and args.dispositivo.isdigit() else args.dispositivo
     sr_mic = int(sd.query_devices(disp, "input")["default_samplerate"])
     bufer = np.zeros(int(3 * sr_mic), np.float32)          # últimos 3 s a la frecuencia del micro
-    t_inicio = time.time()
-    ruido_db, muestras_ruido = None, []
-    print("Micrófono: %s (%d Hz). Silencio %.0f s para medir el ruido de fondo..."
-          % (sd.query_devices(disp, "input")["name"], sr_mic, CALIBRACION_S))
+    bloques = queue.Queue()                                # el callback no pierde audio
+    perdidas = []
 
-    with sd.InputStream(device=disp, channels=1, samplerate=sr_mic, dtype="float32") as flujo:
+    def recibir(datos, frames, tiempo, estado):
+        if estado.input_overflow:
+            perdidas.append(frames)
+        bloques.put(datos[:, 0].copy())
+
+    print("Micrófono: %s (%d Hz). Silencio %.0f s para medir el ruido de fondo..."
+          % (sd.query_devices(disp, "input")["name"], sr_mic, ARRANQUE_S + CALIBRACION_S))
+    t_inicio = time.time()
+    suelo, calibrado = SueloRuido(), False
+    ultimo, t_ultimo = None, 0.0
+
+    with sd.InputStream(device=disp, channels=1, samplerate=sr_mic, dtype="float32", callback=recibir):
         print("Enviando a %s:%d a %.0f Hz. Ctrl+C para salir." % (IP, PUERTO_PERCEPCION, args.hz))
         try:
             while True:
                 t_tick = time.time()
-                datos, _ = flujo.read(flujo.read_available or 1)
-                n = len(datos)
-                bufer = np.concatenate([bufer[n:], datos[:, 0]]) if n < len(bufer) else datos[-len(bufer):, 0]
+                nuevos = [bloques.get_nowait() for _ in range(bloques.qsize())]
+                if nuevos:
+                    nuevos = np.concatenate(nuevos)
+                    bufer = np.concatenate([bufer, nuevos])[-len(bufer):]
                 x16k = librosa.resample(bufer, orig_sr=sr_mic, target_sr=SR)
 
-                if ruido_db is None:
-                    muestras_ruido.append(energia_db(x16k[-int(SR / args.hz):]))
-                    if time.time() - t_inicio >= CALIBRACION_S:
-                        ruido_db = float(np.percentile(np.concatenate(muestras_ruido), 50))
-                        if ruido_db > RUIDO_MAX_DB:
-                            sys.exit("[error] ruido de fondo de %.1f dB: este micrófono está saturado o estabas "
-                                     "hablando. Repite en silencio o elige otro en Configuración -> Sonido "
-                                     "(o con --dispositivo, ver --listar)." % ruido_db)
-                        print("ruido de fondo: %.1f dB. Ya puedes hablar." % ruido_db)
+                # El primer segundo se descarta: al abrir un micrófono llegan ceros o un transitorio
+                if len(nuevos) and t_tick - t_inicio >= ARRANQUE_S:
+                    suelo.agregar(librosa.resample(nuevos, orig_sr=sr_mic, target_sr=SR))
+
+                if not calibrado:
+                    if t_tick - t_inicio >= ARRANQUE_S + CALIBRACION_S:
+                        if suelo.valor() is None:
+                            sys.exit("[error] no llega audio del micrófono. Elige otro en Configuración -> Sonido "
+                                     "(o con --dispositivo, ver --listar).")
+                        calibrado = True
+                        print("ruido de fondo: %.1f dB. Ya puedes hablar." % suelo.valor())
+                        if suelo.valor() > RUIDO_ALTO_DB:
+                            print("[aviso] micrófono muy ruidoso: la voz se distingue peor. Mejor uno más cercano.")
                     mensaje = {"t": time.time(), "fuente": "audio", "estres": None, "confianza": 0.0,
                                "etiqueta": "", "probs": {}, "voz": 0.0}
                 else:
-                    mensaje = analizar(x16k, ruido_db, clf)
+                    mensaje = analizar(x16k, suelo.valor(), clf)
+                    if mensaje["estres"] is not None:
+                        ultimo, t_ultimo = mensaje, t_tick
+                    elif ultimo is not None:
+                        mensaje = mantener(mensaje, ultimo, t_ultimo, t_tick)
                     imprimir(mensaje)
+                if perdidas:
+                    print("\n[aviso] se perdió audio (%d muestras): laptop muy cargada" % sum(perdidas))
+                    del perdidas[:]
                 sock.sendto(json.dumps(mensaje).encode("utf-8"), (IP, PUERTO_PERCEPCION))
                 time.sleep(max(0.0, 1.0 / args.hz - (time.time() - t_tick)))
         except KeyboardInterrupt:
