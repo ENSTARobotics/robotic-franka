@@ -1,13 +1,13 @@
-# Programas del host: percepción (cara y voz), pantalla y diálogo. Probado con Python 3.12.
+# Host programs: perception (face, voice, hands), screen and dialogue. Tested with Python 3.12.
 #   python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
-# supervisor/ no necesita nada de esto y robot/ corre en el contenedor Docker.
+# supervisor/ needs none of this and robot/ runs in the Docker container.
 #
-# PyTorch para CUDA 12.6: última serie que funciona con GPUs Pascal como la GTX 1050 Ti. Sin GPU
-# NVIDIA también se instala: lanza rostro.py y voz.py con --cpu.
+# PyTorch for CUDA 12.6: the last series that works with Pascal GPUs like the GTX 1050 Ti. Without an
+# NVIDIA GPU it installs too: run face.py and voice.py with --cpu.
 --extra-index-url https://download.pytorch.org/whl/cu126
 torch==2.14.1+cu126
-torchvision==0.29.1+cu126   # la de PyPI no casa con torch+cu126 (torchvision::nms does not exist)
-ultralytics==8.4.198        # YOLO de manos (percepcion/manos.py)
+torchvision==0.29.1+cu126   # the PyPI one does not match torch+cu126 (torchvision::nms does not exist)
+ultralytics==8.4.198        # hand YOLO (perception/hands.py)
 numpy==2.3.1
 opencv-python==4.13.0.92
 librosa==1.0.0

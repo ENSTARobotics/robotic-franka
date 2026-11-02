@@ -1,10 +1,10 @@
 # Session data (may contain pilot participants' data)
 logs/
-# Backups made by robot/grabar_poses.py
-datos/*.bak-*
+# Backups made by robot/record_poses.py
+data/*.bak-*
 __pycache__/
 *.pyc
 # Python environment for perception
 .venv/
-# Voice models for dialogo.py (~130 MB): downloaded by dialogo/descargar_modelos.py
-dialogo/modelos/
+# Voice models for dialogue.py (~130 MB): downloaded by dialogue/download_models.py
+dialogue/models/

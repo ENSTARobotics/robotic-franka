@@ -1,0 +1,8 @@
+hands_yolov8n.pt: YOLOv8n trained to detect hands (one class, "hand"), ADetailer's hand_yolov8n.pt,
+downloaded from https://huggingface.co/JCTN/adetailer/resolve/main/hand_yolov8n.pt (a copy of
+https://huggingface.co/Bingsu/adetailer). It came with the team's YOLO_hands hand detector.
+sha256 3991202eb69e9ddcb3b9ba80cdeb41e734ffaf844403d6c9f47d515cd88c6f29
+
+It runs with Ultralytics (ultralytics==8.4.198), licensed AGPL-3.0. The model's license is on its
+Hugging Face page.
+Speed on the test laptop (GTX 1650, imgsz 640): ~9 ms per image on the GPU, ~39 ms on the CPU.

@@ -71,31 +71,31 @@ sudo docker start franka_container
 sudo docker exec -it franka_container bash      # once per terminal
 ```
 
-## 4. Host programs (face, voice, screen and dialogue)
+## 4. Host programs (face, voice, hands, screen and dialogue)
 
 The keyboard supervisor needs none of this, and the controller runs in the container. Without an NVIDIA
-GPU, run `rostro.py` and `voz.py` with `--cpu`.
+GPU, run `face.py` and `voice.py` with `--cpu`.
 
 ```bash
 sudo apt install python3.12-venv libportaudio2
 cd ~/robotic-franka/real_robot
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
-.venv/bin/python dialogo/descargar_modelos.py
-.venv/bin/python -c "import cv2, torch, librosa, sounddevice, PIL, piper, vosk; print('CUDA:', torch.cuda.is_available())"
+.venv/bin/python dialogue/download_models.py
+.venv/bin/python -c "import cv2, torch, librosa, sounddevice, PIL, piper, vosk, ultralytics; print('CUDA:', torch.cuda.is_available())"
 ```
 
 Choose your speakers in *Settings → Sound*. Cameras and microphones are chosen by name:
 
-- `rostro.py` looks for a Logitech C920. On another computer use `--camara <name or number>`; if it cannot
+- `face.py` looks for a Logitech C920. On another computer use `--camera <name or number>`; if it cannot
   find one, the error lists those available. Each webcam shows up as two `/dev/video*` devices: use the first.
-- `voz.py` and `dialogo.py` look for a Logitech C930e and fall back to the system microphone, with a warning.
-  Both print the microphone in use. Choose another with `--dispositivo <name>`, or list them with
-  `voz.py --listar`. Prefer a microphone close to the speaker: a noisy one detects speech poorly.
+- `voice.py` and `dialogue.py` look for a Logitech C930e and fall back to the system microphone, with a warning.
+  Both print the microphone in use. Choose another with `--device <name>`, or list them with
+  `voice.py --list`. Prefer a microphone close to the speaker: a noisy one detects speech poorly.
 
 ## 5. Start the stack (inside the container)
 
-From the second time on, `./lanzar.sh`, run from the Ubuntu Terminal, does this for you: see
+From the second time on, `./launch.sh`, run from the Ubuntu Terminal, does this for you: see
 [Quick start](README.md#quick-start). The first time, do it by hand so you can see each step.
 
 In **each** container terminal:
@@ -124,13 +124,13 @@ In a fifth container terminal, with your hand on the emergency stop:
 
 ```bash
 cd /root/robotic-franka/real_robot/robot
-python3 prueba_comunicacion.py 1      # turns the wrist 20° and back
+python3 communication_test.py 1      # turns the wrist 20° and back
 ```
 
 If that works, continue with the [README](README.md).
 
-The poses and corners in `datos/` belong to our table. If the table or the PCB moved, or the pen changed,
-record them again (`robot/grabar_poses.py`) and check the plan (`python3 robot/plan_placa.py`).
+The poses and corners in `data/` belong to our table. If the table or the PCB moved, or the pen changed,
+record them again (`robot/record_poses.py`) and check the plan (`python3 robot/pcb_plan.py`).
 
 Notes:
 

@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
-"""Supervisor de confianza (host): percepción -> T(t) -> NORMAL/CAUTIOUS/PAUSED -> robot.
+"""Trust supervisor (host): perception -> T(t) -> NORMAL/CAUTIOUS/PAUSED -> robot.
 
     python3 supervisor.py --v-normal 0.6 --v-cautious 0.3
 
-Recibe la percepción (rostro.py, voz.py) en UDP 5010, calcula T(t) y la máquina de estados
-de confianza.py, y manda el estado al controlador por UDP 5005, igual que
-supervisor_teclado.py. Envía un resumen a pantalla.py por UDP 5011.
-Órdenes de voz de dialogo.py (UDP 5013): empezar = a; pausa = p; lento = CAUTIOUS 20 s;
-seguir = automático desde CAUTIOUS 20 s. Mientras el robot habla, ignora la emoción de la voz.
-Manos (percepcion/manos.py, UDP 5016): si hay manos junto a la placa cuando el robot iba a moverse,
-RETRACT (para y sube 5 cm) y se queda así, en cualquier modo, hasta que la zona esté libre Y el
-operador diga "continue" (o pulse a, n o c). Sin manos.py abierto no se vigila.
-Teclas:  k = calibrar el nivel normal del operador (robot en pausa; ignora las órdenes de voz)
-         a = AUTOMÁTICO (el estado lo decide T(t))
-         n / c / p / r = MANUAL: NORMAL / CAUTIOUS / PAUSED / RETRACT (anulan el automático)
-         q = salir
-Arranca en MANUAL + PAUSED: el robot no se mueve hasta que pulses a (o n/c).
-CSV en logs/supervisor_auto_<fecha>.csv con T(t), cada fuente, el estado y el robot.
+Receives perception (face.py, voice.py) on UDP 5010, computes T(t) and the state machine of
+trust.py, and sends the state to the controller over UDP 5005, like keyboard_supervisor.py.
+Sends a summary to screen.py over UDP 5011.
+Voice orders from dialogue.py (UDP 5013): start = a; pause = p; slow = CAUTIOUS 20 s;
+resume = automatic from CAUTIOUS 20 s. While the robot speaks, the voice emotion is ignored.
+Hands (perception/hands.py, UDP 5016): if there are hands next to the PCB when the robot was about
+to move, RETRACT (stops and goes up 5 cm) and it stays like that, in any mode, until the zone is
+clear AND the operator says "continue" (or presses a, n or c). Without hands.py open nothing is watched.
+Keys:  k = calibrate the operator's baseline (robot paused; voice orders are ignored)
+       a = AUTOMATIC (T(t) decides the state)
+       n / c / p / r = MANUAL: NORMAL / CAUTIOUS / PAUSED / RETRACT (override automatic)
+       q = quit
+Starts in MANUAL + PAUSED: the robot does not move until you press a (or n/c).
+CSV in logs/supervisor_auto_<date>.csv with T(t), each source, the state and the robot.
 """
 import argparse
 import csv
@@ -29,302 +29,303 @@ import termios
 import time
 import tty
 
-from confianza import Confianza, MaquinaEstados
+from trust import Trust, StateMachine
 
 IP = "127.0.0.1"
-PUERTO_CMD = 5005
-PUERTO_ESTADO = 5006
-PUERTO_PERCEPCION = 5010
-PUERTO_PANEL = 5011         # resumen para pantalla.py
-PUERTO_COMANDOS = 5013      # órdenes de dialogo.py (voz)
-PUERTO_DIALOGO = 5014       # resumen para dialogo.py
-PUERTO_MANOS = 5016         # percepcion/manos.py
-EDAD_MANOS = 0.5            # s: un aviso de manos más viejo no cuenta
-HZ_PANEL = 10.0
-MARGEN_ECO = 0.5            # s tras hablar el robot en que se ignora la emoción de la voz
-CALIBRACION_S = 20.0        # s que dura la calibración con la tecla k
-S_VOZ_LENTO = 20.0          # s que dura un "slow down" / "continue" por voz antes de poder subir
+CMD_PORT = 5005
+STATE_PORT = 5006
+PERCEPTION_PORT = 5010
+PANEL_PORT = 5011           # summary for screen.py
+COMMANDS_PORT = 5013        # orders from dialogue.py (voice)
+DIALOGUE_PORT = 5014        # summary for dialogue.py
+HANDS_PORT = 5016           # perception/hands.py
+HANDS_MAX_AGE = 0.5         # s: an older hands message does not count
+PANEL_HZ = 10.0
+ECHO_MARGIN = 0.5           # s after the robot speaks in which the voice emotion is ignored
+CALIBRATION_S = 20.0        # s the calibration with the k key lasts
+VOICE_SLOW_S = 20.0         # s a "slow down" / "continue" by voice lasts before it can go up
 HZ = 20.0
-HZ_PANTALLA = 5.0           # redibujados por segundo como máximo (el envío UDP sigue a HZ)
-TIMEOUT_ROBOT = 0.5
-FUENTES = ("rostro", "audio")
+SCREEN_HZ = 5.0             # redraws per second at most (UDP sending keeps HZ)
+ROBOT_TIMEOUT = 0.5
+SOURCES = ("face", "audio")
 
-TECLAS = {"n": "NORMAL", "c": "CAUTIOUS", "p": "PAUSED", "r": "RETRACT"}
+KEYS = {"n": "NORMAL", "c": "CAUTIOUS", "p": "PAUSED", "r": "RETRACT"}
 COLOR = {"NORMAL": "\033[42;30m", "CAUTIOUS": "\033[43;30m", "PAUSED": "\033[41;37m",
          "RETRACT": "\033[44;37m"}
 RESET = "\033[0m"
 
-COLUMNAS = (["t_host", "tecla", "modo", "cmd_state", "cmd_speed_scale", "cmd_retract", "T", "estres",
-             "sin_datos", "motivo", "normal_rostro", "normal_audio", "manos_cerca", "bloqueo_manos"]
-            + ["%s_%s" % (f, k) for f in FUENTES for k in ("estres", "confianza", "etiqueta", "edad_s")]
-            + ["rob_edad_s", "rob_state", "rob_segment", "rob_action", "rob_speed_scale", "rob_event", "rob_done", "rob_error",
-               "ee_x", "ee_y", "ee_z"])
+COLUMNS = (["t_host", "key", "mode", "cmd_state", "cmd_speed_scale", "cmd_retract", "T", "stress",
+            "no_data", "reason", "baseline_face", "baseline_audio", "hands_near", "hands_lock"]
+           + ["%s_%s" % (f, k) for f in SOURCES for k in ("stress", "confidence", "label", "age_s")]
+           + ["rob_age_s", "rob_state", "rob_segment", "rob_action", "rob_speed_scale", "rob_event", "rob_done",
+              "rob_error", "ee_x", "ee_y", "ee_z"])
 
 
-def color(estado):
-    return COLOR.get(estado, "") + " %-8s " % estado + RESET
+def color(state):
+    return COLOR.get(state, "") + " %-8s " % state + RESET
 
 
-def leer_todo(sock):
-    """Todos los JSON pendientes en el socket (los que no parsean se ignoran)."""
-    mensajes = []
+def read_all(sock):
+    """Every pending JSON on the socket (the ones that do not parse are ignored)."""
+    messages = []
     while True:
         try:
-            datos, _ = sock.recvfrom(65536)
+            data, _ = sock.recvfrom(65536)
         except (BlockingIOError, socket.error):
-            return mensajes
+            return messages
         try:
-            mensajes.append(json.loads(datos.decode("utf-8")))
+            messages.append(json.loads(data.decode("utf-8")))
         except ValueError:
             pass
 
 
 def main():
-    p = argparse.ArgumentParser(description="Supervisor de confianza: percepción -> estado del robot")
-    p.add_argument("--v-normal", type=float, default=0.3, help="speed_scale en NORMAL")
-    p.add_argument("--v-cautious", type=float, default=0.15, help="speed_scale en CAUTIOUS")
+    p = argparse.ArgumentParser(description="Trust supervisor: perception -> robot state")
+    p.add_argument("--v-normal", type=float, default=0.3, help="speed_scale in NORMAL")
+    p.add_argument("--v-cautious", type=float, default=0.15, help="speed_scale in CAUTIOUS")
     p.add_argument("--log-dir", default=os.path.abspath(os.path.join(
         os.path.dirname(os.path.abspath(__file__)), os.pardir, "logs")))
     args = p.parse_args()
-    velocidad = {"NORMAL": args.v_normal, "CAUTIOUS": args.v_cautious, "PAUSED": 0.0, "RETRACT": 0.0}
+    speed = {"NORMAL": args.v_normal, "CAUTIOUS": args.v_cautious, "PAUSED": 0.0, "RETRACT": 0.0}
     if not sys.stdin.isatty():
-        sys.exit("[error] Hace falta una terminal para leer el teclado.")
+        sys.exit("[error] A terminal is needed to read the keyboard.")
 
     os.makedirs(args.log_dir, exist_ok=True)
-    ruta_csv = os.path.join(args.log_dir, time.strftime("supervisor_auto_%Y%m%d_%H%M%S.csv"))
-    f_csv = open(ruta_csv, "w", newline="")
+    csv_path = os.path.join(args.log_dir, time.strftime("supervisor_auto_%Y%m%d_%H%M%S.csv"))
+    f_csv = open(csv_path, "w", newline="")
     log = csv.writer(f_csv)
-    log.writerow(COLUMNAS)
+    log.writerow(COLUMNS)
 
     sock_cmd = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock_estado = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock_estado.bind((IP, PUERTO_ESTADO))
-    sock_estado.setblocking(False)
+    sock_state = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock_state.bind((IP, STATE_PORT))
+    sock_state.setblocking(False)
     sock_perc = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock_perc.bind((IP, PUERTO_PERCEPCION))
+    sock_perc.bind((IP, PERCEPTION_PORT))
     sock_perc.setblocking(False)
-    sock_voz = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock_voz.bind((IP, PUERTO_COMANDOS))
-    sock_voz.setblocking(False)
-    sock_manos = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock_manos.bind((IP, PUERTO_MANOS))
-    sock_manos.setblocking(False)
-    silencio_audio_hasta = 0.0
-    manos, t_manos = {}, None
-    bloqueo_manos = False       # manos junto a la placa: RETRACT hasta zona libre + "continue"
+    sock_voice = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock_voice.bind((IP, COMMANDS_PORT))
+    sock_voice.setblocking(False)
+    sock_hands = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock_hands.bind((IP, HANDS_PORT))
+    sock_hands.setblocking(False)
+    mute_audio_until = 0.0
+    hands, t_hands = {}, None
+    hands_lock = False          # hands next to the PCB: RETRACT until the zone is clear + "continue"
 
-    confianza, fsm = Confianza(), MaquinaEstados()
-    modo, manual = "MANUAL", "PAUSED"
-    t_fin_calibracion, calibracion = None, ""   # calibracion: resultado de la última, para dialogo.py
-    robot, t_robot, ultimo_evento = {}, None, None
-    texto_prev, t_pantalla, t_flush, t_panel = "", 0.0, 0.0, 0.0
+    trust, fsm = Trust(), StateMachine()
+    mode, manual = "MANUAL", "PAUSED"
+    t_calibration_end, calibration = None, ""   # calibration: result of the last one, for dialogue.py
+    robot, t_robot, last_event = {}, None, None
+    text_prev, t_screen, t_flush, t_panel = "", 0.0, 0.0, 0.0
 
-    def linea(texto):
-        nonlocal texto_prev
-        sys.stdout.write("\r\033[K" + texto + "\n")
-        texto_prev = ""
+    def line(text):
+        nonlocal text_prev
+        sys.stdout.write("\r\033[K" + text + "\n")
+        text_prev = ""
 
-    print("Supervisor de confianza. k = calibrar | a = AUTOMÁTICO | n/c/p/r = manual NORMAL/CAUTIOUS/PAUSED/RETRACT"
-          " | q = salir")
-    print("NORMAL %.2f, CAUTIOUS %.2f. Empieza en MANUAL + PAUSED. Percepción en UDP %d. Log: %s\n"
-          % (args.v_normal, args.v_cautious, PUERTO_PERCEPCION, ruta_csv))
+    print("Trust supervisor. k = calibrate | a = AUTOMATIC | n/c/p/r = manual NORMAL/CAUTIOUS/PAUSED/RETRACT"
+          " | q = quit")
+    print("NORMAL %.2f, CAUTIOUS %.2f. Starts in MANUAL + PAUSED. Perception on UDP %d. Log: %s\n"
+          % (args.v_normal, args.v_cautious, PERCEPTION_PORT, csv_path))
 
     fd = sys.stdin.fileno()
-    config_terminal = termios.tcgetattr(fd)
+    terminal_config = termios.tcgetattr(fd)
     tty.setcbreak(fd)
-    periodo = 1.0 / HZ
+    period = 1.0 / HZ
     try:
         while True:
             t_tick = time.time()
 
-            # Manos junto a la placa (manos.py). Sin mensajes recientes no se sabe: no cuenta como cerca
-            for m in leer_todo(sock_manos):
-                manos, t_manos = m, t_tick
-            vigilando = t_manos is not None and t_tick - t_manos <= EDAD_MANOS and manos.get("cerca") is not None
-            manos_cerca = vigilando and manos.get("cerca") is True
+            # Hands next to the PCB (hands.py). Without recent messages it is unknown: it does not count as near
+            for m in read_all(sock_hands):
+                hands, t_hands = m, t_tick
+            watching = t_hands is not None and t_tick - t_hands <= HANDS_MAX_AGE and hands.get("near") is not None
+            hands_near = watching and hands.get("near") is True
 
-            def soltar_manos(origen):
-                """"continue" (o a/n/c) con la zona libre quita el bloqueo; con manos todavía, no."""
-                nonlocal bloqueo_manos
-                if manos_cerca:
-                    linea("[manos] %s ignorado: sigue habiendo manos junto a la placa" % origen)
+            def release_hands(origin):
+                """"continue" (or a/n/c) with the zone clear removes the lock; with hands still there, it does not."""
+                nonlocal hands_lock
+                if hands_near:
+                    line("[hands] %s ignored: there are still hands next to the PCB" % origin)
                     return False
-                bloqueo_manos = False
-                linea("[manos] zona libre y %s: se reanuda" % origen)
+                hands_lock = False
+                line("[hands] zone clear and %s: resuming" % origin)
                 return True
 
-            # Teclado
-            tecla = ""
+            # Keyboard
+            key = ""
             if select.select([fd], [], [], 0)[0]:
-                tecla = os.read(fd, 32).decode("utf-8", "ignore")[-1:].lower()
-                if tecla == "q":
+                key = os.read(fd, 32).decode("utf-8", "ignore")[-1:].lower()
+                if key == "q":
                     break
-                if t_fin_calibracion is not None and (tecla in ("a", "k") or tecla in TECLAS):
-                    t_fin_calibracion, calibracion = None, "cancelada"
-                    confianza.cancelar_calibracion()
-                    linea("[calibración] cancelada")
-                if tecla == "k":
-                    modo, manual = "MANUAL", "PAUSED"
-                    t_fin_calibracion = t_tick + CALIBRACION_S
-                    confianza.empezar_calibracion()
-                    linea("[tecla k] calibrando %.0f s: mira a la cámara y habla con normalidad" % CALIBRACION_S)
-                elif tecla == "a":
-                    modo = "AUTO"
-                    linea("[tecla a] modo AUTOMÁTICO: el estado lo decide T(t)")
-                elif tecla in TECLAS:
-                    modo, manual = "MANUAL", TECLAS[tecla]
-                    linea("[tecla %s] modo MANUAL -> %s" % (tecla, color(manual)))
-                elif tecla.strip():
-                    linea("[tecla %r] no reconocida (k, a, n, c, p, r, q)" % tecla)
-                if bloqueo_manos and tecla in ("a", "n", "c"):
-                    soltar_manos("tecla " + tecla)
+                if t_calibration_end is not None and (key in ("a", "k") or key in KEYS):
+                    t_calibration_end, calibration = None, "cancelled"
+                    trust.cancel_calibration()
+                    line("[calibration] cancelled")
+                if key == "k":
+                    mode, manual = "MANUAL", "PAUSED"
+                    t_calibration_end = t_tick + CALIBRATION_S
+                    trust.start_calibration()
+                    line("[key k] calibrating %.0f s: look at the camera and talk normally" % CALIBRATION_S)
+                elif key == "a":
+                    mode = "AUTO"
+                    line("[key a] AUTOMATIC mode: T(t) decides the state")
+                elif key in KEYS:
+                    mode, manual = "MANUAL", KEYS[key]
+                    line("[key %s] MANUAL mode -> %s" % (key, color(manual)))
+                elif key.strip():
+                    line("[key %r] not recognized (k, a, n, c, p, r, q)" % key)
+                if hands_lock and key in ("a", "n", "c"):
+                    release_hands("key " + key)
 
-            # Órdenes de voz (dialogo.py); se registran en la columna "tecla" como voz:<orden>
-            for m in leer_todo(sock_voz):
-                orden = m.get("comando")
-                if orden == "hablando":
-                    silencio_audio_hasta = float(m.get("hasta", 0.0)) + MARGEN_ECO
+            # Voice orders (dialogue.py); logged in the "key" column as voice:<order>
+            for m in read_all(sock_voice):
+                order = m.get("command")
+                if order == "speaking":
+                    mute_audio_until = float(m.get("until", 0.0)) + ECHO_MARGIN
                     continue
-                if t_fin_calibracion is not None:
-                    continue                    # le pedimos que hable: un "yes" mal oído no debe arrancar el robot
-                if bloqueo_manos and orden in ("empezar", "seguir") and not soltar_manos("voz " + orden):
+                if t_calibration_end is not None:
+                    continue                    # we asked them to talk: a misheard "yes" must not start the robot
+                if hands_lock and order in ("start", "resume") and not release_hands("voice " + order):
                     continue
-                if orden == "empezar":
-                    modo = "AUTO"
-                elif orden == "pausa":
-                    modo, manual = "MANUAL", "PAUSED"
-                elif orden == "seguir":
-                    modo = "AUTO"
-                    fsm.forzar("CAUTIOUS", "voz", S_VOZ_LENTO, t_tick)
-                elif orden == "lento":
-                    if modo == "AUTO":
-                        fsm.forzar("CAUTIOUS", "voz", S_VOZ_LENTO, t_tick)
+                if order == "start":
+                    mode = "AUTO"
+                elif order == "pause":
+                    mode, manual = "MANUAL", "PAUSED"
+                elif order == "resume":
+                    mode = "AUTO"
+                    fsm.force("CAUTIOUS", "voice", VOICE_SLOW_S, t_tick)
+                elif order == "slow":
+                    if mode == "AUTO":
+                        fsm.force("CAUTIOUS", "voice", VOICE_SLOW_S, t_tick)
                     else:
                         manual = "CAUTIOUS"
                 else:
                     continue
-                tecla = "voz:" + orden
-                linea("[voz] %s -> modo %s, %s" % (orden, modo, color(fsm.estado if modo == "AUTO" else manual)))
+                key = "voice:" + order
+                line("[voice] %s -> mode %s, %s" % (order, mode, color(fsm.state if mode == "AUTO" else manual)))
 
-            if t_fin_calibracion is not None and t_tick >= t_fin_calibracion:
-                t_fin_calibracion = None
-                normal = confianza.terminar_calibracion()
-                faltan = [f for f in FUENTES if f not in normal]
-                calibracion = "ok" if not faltan else "sin_" + faltan[0] if normal else "sin_datos"
-                linea("[calibración] nivel normal: " + ", ".join(
-                    "%s %s" % (f, "%.2f" % normal[f] if f in normal else "sin datos, queda sin calibrar") for f in FUENTES))
+            if t_calibration_end is not None and t_tick >= t_calibration_end:
+                t_calibration_end = None
+                baseline = trust.finish_calibration()
+                missing = [f for f in SOURCES if f not in baseline]
+                calibration = "ok" if not missing else "no_" + missing[0] if baseline else "no_data"
+                line("[calibration] baseline: " + ", ".join(
+                    "%s %s" % (f, "%.2f" % baseline[f] if f in baseline else "no data, stays uncalibrated")
+                    for f in SOURCES))
 
-            # Percepción -> T(t) -> máquina de estados (corre siempre, también en manual)
-            for m in leer_todo(sock_perc):
-                if m.get("fuente") == "audio" and t_tick < silencio_audio_hasta:
-                    continue                    # es el robot hablando, no el operador
-                confianza.recibir(m, t_tick)
-            T = confianza.actualizar(t_tick)
-            sin_datos = confianza.sin_datos(t_tick)
-            if fsm.actualizar(T, sin_datos, t_tick):
-                linea("[confianza] %s %s: %s" % ("->" if modo == "AUTO" else "(sugerido, modo manual)",
-                                                 color(fsm.estado), fsm.motivo))
+            # Perception -> T(t) -> state machine (always runs, also in manual)
+            for m in read_all(sock_perc):
+                if m.get("source") == "audio" and t_tick < mute_audio_until:
+                    continue                    # it is the robot speaking, not the operator
+                trust.receive(m, t_tick)
+            T = trust.update(t_tick)
+            no_data = trust.no_data(t_tick)
+            if fsm.update(T, no_data, t_tick):
+                line("[trust] %s %s: %s" % ("->" if mode == "AUTO" else "(suggested, manual mode)",
+                                            color(fsm.state), fsm.reason))
 
-            estado = fsm.estado if modo == "AUTO" else manual
-            # Manos: sólo bloquean si el robot iba a moverse (antes de empezar el operador coloca la placa).
-            # Si ya estaba en pausa, el bloqueo llega en cuanto algo intente reanudar con las manos ahí
-            if manos_cerca and not bloqueo_manos and estado in ("NORMAL", "CAUTIOUS"):
-                bloqueo_manos = True
-                linea("[manos] manos junto a la placa -> %s hasta zona libre y \"continue\"" % color("RETRACT"))
-            if bloqueo_manos:
-                estado = "RETRACT"
-            causa = ("calibrando" if t_fin_calibracion is not None else
-                     ("manos" if manos_cerca else "manos_libre") if bloqueo_manos else
-                     fsm.causa if modo == "AUTO" else "manual")
-            cmd = {"t": time.time(), "enabled": estado != "PAUSED", "speed_scale": velocidad[estado],
-                   "retract": estado == "RETRACT", "state": "PAUSED" if estado == "RETRACT" else estado,
+            state = fsm.state if mode == "AUTO" else manual
+            # Hands: they only lock if the robot was about to move (before starting, the operator places the PCB).
+            # If it was already paused, the lock comes as soon as something tries to resume with the hands there
+            if hands_near and not hands_lock and state in ("NORMAL", "CAUTIOUS"):
+                hands_lock = True
+                line("[hands] hands next to the PCB -> %s until the zone is clear and \"continue\"" % color("RETRACT"))
+            if hands_lock:
+                state = "RETRACT"
+            cause = ("calibrating" if t_calibration_end is not None else
+                     ("hands" if hands_near else "hands_clear") if hands_lock else
+                     fsm.cause if mode == "AUTO" else "manual")
+            cmd = {"t": time.time(), "enabled": state != "PAUSED", "speed_scale": speed[state],
+                   "retract": state == "RETRACT", "state": "PAUSED" if state == "RETRACT" else state,
                    "trust": None if T is None else round(T, 3),
-                   "reason": "manos junto a la placa" if bloqueo_manos else fsm.motivo if modo == "AUTO" else "manual"}
-            sock_cmd.sendto(json.dumps(cmd).encode("utf-8"), (IP, PUERTO_CMD))
+                   "reason": "hands next to the PCB" if hands_lock else fsm.reason if mode == "AUTO" else "manual"}
+            sock_cmd.sendto(json.dumps(cmd).encode("utf-8"), (IP, CMD_PORT))
 
-            # Estado del robot
-            for m in leer_todo(sock_estado):
+            # Robot's state
+            for m in read_all(sock_state):
                 robot, t_robot = m, t_tick
-            edad = t_tick - t_robot if t_robot is not None else None
-            if robot.get("event") and robot.get("event") != ultimo_evento:
-                ultimo_evento = robot["event"]
-                linea("[robot] " + ultimo_evento)
+            age = t_tick - t_robot if t_robot is not None else None
+            if robot.get("event") and robot.get("event") != last_event:
+                last_event = robot["event"]
+                line("[robot] " + last_event)
 
-            # Resumen para la pantalla del operador
-            validas = confianza.validas(t_tick)
-            if t_tick - t_panel >= 1.0 / HZ_PANEL:
+            # Summary for the operator's screen
+            valid = trust.valid(t_tick)
+            if t_tick - t_panel >= 1.0 / PANEL_HZ:
                 t_panel = t_tick
-                fuentes = {}
-                for f, (t_f, m) in confianza.ultimo.items():
-                    fuentes[f] = {"etiqueta": m.get("etiqueta") or "", "estres": m.get("estres"),
-                                  "confianza": m.get("confianza"), "valida": f in validas,
-                                  "edad": round(t_tick - t_f, 2)}
-                panel = {"t": t_tick, "modo": modo, "estado": estado, "causa": causa, "motivo": cmd["reason"],
-                         "calibracion": calibracion, "T": cmd["trust"], "fuentes": fuentes,
-                         "manos": {"vigilando": vigilando, "cerca": manos_cerca, "bloqueo": bloqueo_manos},
-                         "robot": {"conectado": edad is not None and edad <= TIMEOUT_ROBOT,
+                sources = {}
+                for f, (t_f, m) in trust.last.items():
+                    sources[f] = {"label": m.get("label") or "", "stress": m.get("stress"),
+                                  "confidence": m.get("confidence"), "valid": f in valid,
+                                  "age": round(t_tick - t_f, 2)}
+                panel = {"t": t_tick, "mode": mode, "state": state, "cause": cause, "reason": cmd["reason"],
+                         "calibration": calibration, "T": cmd["trust"], "sources": sources,
+                         "hands": {"watching": watching, "near": hands_near, "lock": hands_lock},
+                         "robot": {"connected": age is not None and age <= ROBOT_TIMEOUT,
                                    "segment": robot.get("segment", ""), "action": robot.get("action", ""),
                                    "seg_index": robot.get("seg_index", 0), "n_segments": robot.get("n_segments", 0),
                                    "done": robot.get("done", False)}}
-                for puerto in (PUERTO_PANEL, PUERTO_DIALOGO):
-                    sock_cmd.sendto(json.dumps(panel).encode("utf-8"), (IP, puerto))
+                for port in (PANEL_PORT, DIALOGUE_PORT):
+                    sock_cmd.sendto(json.dumps(panel).encode("utf-8"), (IP, port))
 
-            # Pantalla del terminal
-            fuentes_txt = []
-            for f in FUENTES:
-                if f in validas:
-                    m = confianza.ultimo[f][1]
-                    fuentes_txt.append("%s %s e%.2f c%.2f" % (f, m.get("etiqueta") or "", validas[f][0], validas[f][1]))
-                elif f in confianza.ultimo:
-                    fuentes_txt.append("%s --" % f)
+            # Terminal screen
+            sources_txt = []
+            for f in SOURCES:
+                if f in valid:
+                    m = trust.last[f][1]
+                    sources_txt.append("%s %s s%.2f c%.2f" % (f, m.get("label") or "", valid[f][0], valid[f][1]))
+                elif f in trust.last:
+                    sources_txt.append("%s --" % f)
             T_txt = "T=--  " if T is None else "T=%.2f" % T
-            if edad is None:
-                rob_txt = "\033[41;37m SIN ROBOT \033[0m"
-            elif edad > TIMEOUT_ROBOT:
-                rob_txt = "\033[41;37m ROBOT PERDIDO \033[0m"
+            if age is None:
+                rob_txt = "\033[41;37m NO ROBOT \033[0m"
+            elif age > ROBOT_TIMEOUT:
+                rob_txt = "\033[41;37m ROBOT LOST \033[0m"
             else:
-                rob_txt = "%s %s" % (robot.get("segment", "?"), {"segmento": "MOVIENDO", "retraccion": "SUBIENDO",
-                                     "soldando": "SOLDANDO"}.get(robot.get("action"), "quieto"))
-            manos_txt = ("\033[41;37m MANOS \033[0m" if manos_cerca else
-                         "\033[44;37m di continue \033[0m" if bloqueo_manos else "" if vigilando else "manos --")
-            texto = "\r\033[K%-6s %s %s | %s | %s %s" % (modo, T_txt, color(estado),
-                                                        ", ".join(fuentes_txt) or "sin percepción", rob_txt, manos_txt)
-            if texto != texto_prev and t_tick - t_pantalla >= 1.0 / HZ_PANTALLA:
-                sys.stdout.write(texto)
+                rob_txt = "%s %s" % (robot.get("segment", "?"), {"segment": "MOVING", "retract": "LIFTING",
+                                     "soldering": "SOLDERING"}.get(robot.get("action"), "still"))
+            hands_txt = ("\033[41;37m HANDS \033[0m" if hands_near else
+                         "\033[44;37m say continue \033[0m" if hands_lock else "" if watching else "hands --")
+            text = "\r\033[K%-6s %s %s | %s | %s %s" % (mode, T_txt, color(state),
+                                                       ", ".join(sources_txt) or "no perception", rob_txt, hands_txt)
+            if text != text_prev and t_tick - t_screen >= 1.0 / SCREEN_HZ:
+                sys.stdout.write(text)
                 sys.stdout.flush()
-                texto_prev, t_pantalla = texto, t_tick
+                text_prev, t_screen = text, t_tick
 
             # CSV
-            fila = [round(t_tick, 3), tecla, modo, cmd["state"], cmd["speed_scale"], cmd["retract"],
-                    "" if T is None else round(T, 4), "" if confianza.estres is None else round(confianza.estres, 4),
-                    sin_datos, fsm.motivo, confianza.normal.get("rostro", ""), confianza.normal.get("audio", ""),
-                    manos_cerca if vigilando else "", bloqueo_manos]
-            for f in FUENTES:
-                if f in confianza.ultimo:
-                    t_f, m = confianza.ultimo[f]
-                    fila += [m.get("estres"), m.get("confianza"), m.get("etiqueta"), round(t_tick - t_f, 3)]
+            row = [round(t_tick, 3), key, mode, cmd["state"], cmd["speed_scale"], cmd["retract"],
+                   "" if T is None else round(T, 4), "" if trust.stress is None else round(trust.stress, 4),
+                   no_data, fsm.reason, trust.baseline.get("face", ""), trust.baseline.get("audio", ""),
+                   hands_near if watching else "", hands_lock]
+            for f in SOURCES:
+                if f in trust.last:
+                    t_f, m = trust.last[f]
+                    row += [m.get("stress"), m.get("confidence"), m.get("label"), round(t_tick - t_f, 3)]
                 else:
-                    fila += ["", "", "", ""]
+                    row += ["", "", "", ""]
             ee = robot.get("ee_xyz") or [""] * 3
-            fila += ["" if edad is None else round(edad, 3)] + [robot.get(k, "") for k in
-                     ("state", "segment", "action", "speed_scale", "event", "done", "error")] + list(ee)
-            log.writerow(fila)
+            row += ["" if age is None else round(age, 3)] + [robot.get(k, "") for k in
+                    ("state", "segment", "action", "speed_scale", "event", "done", "error")] + list(ee)
+            log.writerow(row)
             if t_tick - t_flush >= 1.0:
                 f_csv.flush()
                 t_flush = t_tick
 
-            time.sleep(max(0.0, periodo - (time.time() - t_tick)))
+            time.sleep(max(0.0, period - (time.time() - t_tick)))
     except KeyboardInterrupt:
         pass
     finally:
         for _ in range(5):
             sock_cmd.sendto(json.dumps({"t": time.time(), "enabled": False, "speed_scale": 0.0,
                                         "retract": False, "state": "PAUSED"}).encode("utf-8"),
-                            (IP, PUERTO_CMD))
+                            (IP, CMD_PORT))
             time.sleep(0.02)
-        termios.tcsetattr(fd, termios.TCSADRAIN, config_terminal)
+        termios.tcsetattr(fd, termios.TCSADRAIN, terminal_config)
         f_csv.close()
-        print("\nSupervisor cerrado (último comando: PAUSED). Log en %s" % ruta_csv)
+        print("\nSupervisor closed (last command: PAUSED). Log in %s" % csv_path)
 
 
 if __name__ == "__main__":

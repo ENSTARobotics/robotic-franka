@@ -1,0 +1,30 @@
+{
+  "note": "Centers of the ArUco markers measured in the robot base frame (x forward, y left, z up), in meters. z = 0 is the surface of the ArUco markers.",
+  "table_z": 0.0,
+  "arucos": {
+    "0": [
+      0.332,
+      -0.284
+    ],
+    "1": [
+      0.364,
+      0.248
+    ],
+    "2": [
+      0.851,
+      -0.257
+    ],
+    "3": [
+      0.851,
+      0.21
+    ]
+  },
+  "contour_order": [
+    "0",
+    "1",
+    "3",
+    "2"
+  ],
+  "aruco_side_m": 0.048,
+  "aruco_dictionary": "DICT_4X4_50"
+}

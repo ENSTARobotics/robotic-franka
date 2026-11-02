@@ -1,0 +1,10 @@
+voice_ravdess_scratch.pt: "scratch" CNN from https://github.com/JairVasquezT/voice-emotion-recognition
+(Jair Vasquez and Lucas Barbosa), trained with entrenar_ravdess.py on RAVDESS (spoken voice,
+24 actors, "calm" merged into "neutral"), with background noise mixed in during training (--ruido): without
+it, any room noise was classified as "disgust". UAR on unseen actors, one group of 6
+(actors 21-24): 65.5 % without noise and 65.8-66.8 % with noise from -60 to -20 dB. The model without
+noise gave 70.4 % +- 5.3 on clean audio, but it does not work with a real microphone.
+
+RAVDESS: Livingstone SR, Russo FA (2018) The Ryerson Audio-Visual Database of Emotional Speech
+and Song (RAVDESS). PLoS ONE 13(5): e0196391. https://doi.org/10.1371/journal.pone.0196391
+Data license: CC BY-NC-SA 4.0 (non-commercial use, citing the source).

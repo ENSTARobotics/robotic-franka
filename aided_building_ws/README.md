@@ -1,60 +1,60 @@
 # aided_building
 
-Projeto simplificado para simulação do braço Franka FR3 no Gazebo com controle via `ros2_control`.
+Simplified project to simulate the Franka FR3 arm in Gazebo, controlled through `ros2_control`.
 
-## Visão geral
-- Apenas o braço FR3 (sem garra/ferramenta)
-- Comunicação ROS 2 simples via `aided_building_comm`
-- Simulação no Gazebo Sim com `gz_ros2_control`
-- Controle por trajetórias com `JointTrajectoryController` (`fr3_arm_controller`)
-- Suporte a **SAFE_ZONE** e **WORK_ZONE** parametrizáveis
-- Mão/PCB do operador simulados no Gazebo
-- Movimento automático para **SAFE_ZONE** na inicialização
+## Overview
+- Only the FR3 arm (no gripper/tool)
+- Simple ROS 2 communication through `aided_building_comm`
+- Simulation in Gazebo Sim with `gz_ros2_control`
+- Trajectory control with `JointTrajectoryController` (`fr3_arm_controller`)
+- Configurable **SAFE_ZONE** and **WORK_ZONE**
+- Operator's hand/PCB simulated in Gazebo
+- Automatic move to **SAFE_ZONE** at startup
 
-## Pacotes
-- `aided_building_description`: URDF/xacro do FR3 para Gazebo + configuração do `ros2_control`, modelos/configurações de zonas
-- `aided_building_bringup`: Launch da simulação (Gazebo, spawn do robô, controladores, RViz, mão do operador)
-- `aided_building_comm`: Nó para envio de trajetórias, auto-movimento para SAFE_ZONE, serviços para ir a SAFE/WORK_ZONE
+## Packages
+- `aided_building_description`: FR3 URDF/xacro for Gazebo + `ros2_control` configuration, zone models/configurations
+- `aided_building_bringup`: simulation launch (Gazebo, robot spawn, controllers, RViz, operator's hand)
+- `aided_building_comm`: node that sends trajectories, auto-move to SAFE_ZONE, services to go to SAFE/WORK_ZONE
 
 ## Interfaces
-| Interface | Tipo | Descrição |
+| Interface | Type | Description |
 | --- | --- | --- |
-| `/franka/joint_targets` | `std_msgs/msg/Float64MultiArray` | Envia 7 posições de juntas (fr3_joint1..7) para o nó de comando |
-| `/franka/go_safe_zone` | `std_srvs/srv/Trigger` | Move o robô para a posição SAFE_ZONE |
-| `/franka/go_work_zone` | `std_srvs/srv/Trigger` | Move o robô para a posição WORK_ZONE |
-| `/franka/home` | `std_srvs/srv/Trigger` | Alias para `/franka/go_safe_zone` (mantido por compatibilidade) |
-| `/franka/stop` | `std_srvs/srv/Trigger` | Mantém a pose atual |
-| `/joint_states` | `sensor_msgs/msg/JointState` | Estados das juntas publicados pelo `joint_state_broadcaster` |
-| `/fr3_arm_controller/joint_trajectory` | `trajectory_msgs/msg/JointTrajectory` | Trajetórias enviadas pelo `franka_comm` para o controlador |
+| `/franka/joint_targets` | `std_msgs/msg/Float64MultiArray` | Sends 7 joint positions (fr3_joint1..7) to the command node |
+| `/franka/go_safe_zone` | `std_srvs/srv/Trigger` | Moves the robot to the SAFE_ZONE position |
+| `/franka/go_work_zone` | `std_srvs/srv/Trigger` | Moves the robot to the WORK_ZONE position |
+| `/franka/home` | `std_srvs/srv/Trigger` | Alias for `/franka/go_safe_zone` (kept for compatibility) |
+| `/franka/stop` | `std_srvs/srv/Trigger` | Holds the current pose |
+| `/joint_states` | `sensor_msgs/msg/JointState` | Joint states published by `joint_state_broadcaster` |
+| `/fr3_arm_controller/joint_trajectory` | `trajectory_msgs/msg/JointTrajectory` | Trajectories sent by `franka_comm` to the controller |
 
-## Configuração de Zonas
+## Zone configuration
 
-As zonas são configuradas por **parâmetros ROS** (passados pelo launch). Também há um arquivo de referência em `aided_building_description/config/zones.yaml` com perfis por cenário.
+The zones are set with **ROS parameters** (passed by the launch). There is also a reference file in `aided_building_description/config/zones.yaml` with profiles per scenario.
 
-- **SAFE_ZONE**: Posição inicial/predefinida e segura (longe da mão do operador). O robô vai para essa posição automaticamente ao iniciar (configurável).
-- **WORK_ZONE**: Posição de trabalho próxima à mão/PCB do operador, para onde o robô se move após estar na SAFE_ZONE.
+- **SAFE_ZONE**: initial/default safe position (away from the operator's hand). The robot goes to this position automatically at startup (configurable).
+- **WORK_ZONE**: work position close to the operator's hand/PCB, where the robot moves after being in the SAFE_ZONE.
 
-## Como rodar (passo a passo)
+## How to run (step by step)
 
-### 1) Configurar ambiente
+### 1) Set up the environment
 ```bash
 source /opt/ros/jazzy/setup.bash
-cd /caminho/para/aided_building_ws  # ex: /work/aided_building_ws
+cd /path/to/aided_building_ws  # e.g. /work/aided_building_ws
 source install/setup.bash
 ```
 
-### 2) Compilar (se houver alterações)
+### 2) Build (if there are changes)
 ```bash
 colcon build --symlink-install
 source install/setup.bash
 ```
 
-### 3) Inicializar simulação
+### 3) Start the simulation
 ```bash
 ros2 launch aided_building_bringup sim.launch.py
 ```
 
-Customização opcional:
+Optional customization:
 ```bash
 ros2 launch aided_building_bringup sim.launch.py \
   scenario:=scenario_1 \
@@ -65,31 +65,31 @@ ros2 launch aided_building_bringup sim.launch.py \
   work_zone_joints:="[0.0, -0.5, 0.0, -2.0, 0.0, 1.5, 0.5]"
 ```
 
-### 4) Verificar controladores
+### 4) Check the controllers
 ```bash
 ros2 control list_controllers
 ```
-Devem estar `active`: `joint_state_broadcaster` e `fr3_arm_controller`.
+`joint_state_broadcaster` and `fr3_arm_controller` must be `active`.
 
-### 5) Controlar o robô
+### 5) Control the robot
 ```bash
-# Ir para SAFE_ZONE
+# Go to SAFE_ZONE
 ros2 service call /franka/go_safe_zone std_srvs/srv/Trigger {}
 
-# Ir para WORK_ZONE
+# Go to WORK_ZONE
 ros2 service call /franka/go_work_zone std_srvs/srv/Trigger {}
 
-# Enviar posição customizada
+# Send a custom position
 ros2 topic pub --once /franka/joint_targets std_msgs/msg/Float64MultiArray "{data: [0.0, -0.5, 0.0, -2.0, 0.0, 1.5, 0.5]}"
 
-# Parar/manter
+# Stop/hold
 ros2 service call /franka/stop std_srvs/srv/Trigger {}
 ```
 
-## Simulando a mão do operador
-A mão/PCB é spawnada via modelo SDF em `aided_building_description/models/operator_hand.sdf`. Ajuste com `hand_x,y,z,hand_roll,hand_pitch,hand_yaw` ou desative com `spawn_operator_hand:=false`. Para calibrar `work_zone_joints`, mova o robô até a posição desejada e leia `/joint_states`.
+## Simulating the operator's hand
+The hand/PCB is spawned from the SDF model in `aided_building_description/models/operator_hand.sdf`. Adjust it with `hand_x,y,z,hand_roll,hand_pitch,hand_yaw` or turn it off with `spawn_operator_hand:=false`. To calibrate `work_zone_joints`, move the robot to the desired position and read `/joint_states`.
 
-## Verificação/debug
+## Checking/debugging
 ```bash
 ros2 control list_controllers
 ros2 topic echo /joint_states --once
@@ -103,8 +103,8 @@ colcon build --symlink-install --packages-select aided_building_description aide
 source install/setup.bash
 ```
 
-## Observações
-- Apenas 7 juntas (FR3), sem garra/ferramenta
-- Apenas simulação no Gazebo
-- Comande apenas após controladores estarem `active`
-- Ambiente: ROS 2 Jazzy, Gazebo Sim, `ros_gz`, `ros2_control`, `gz_ros2_control`, `franka_description`
+## Notes
+- Only 7 joints (FR3), no gripper/tool
+- Gazebo simulation only
+- Only send commands after the controllers are `active`
+- Environment: ROS 2 Jazzy, Gazebo Sim, `ros_gz`, `ros2_control`, `gz_ros2_control`, `franka_description`

@@ -15,14 +15,14 @@ follow [`real_robot/SETUP.md`](real_robot/SETUP.md).
 | Part | Status | Code |
 |---|---|---|
 | Robot control over UDP (speed, pause, vertical retreat, stop on lost link) | Works on the real robot | `real_robot/robot/` |
-| Soldering routine over a recorded PCB (grid of points, FK/IK) | Works on the real robot | `real_robot/robot/plan_placa.py` |
-| Keyboard supervisor with CSV logging | Works on the real robot | `real_robot/supervisor/supervisor_teclado.py` |
-| Facial expression to stress (GPU) | Works live with a webcam, not yet driving the real robot | `real_robot/percepcion/rostro.py` |
-| Voice emotion to stress (GPU), English model | Works live with a microphone, not yet driving the real robot | `real_robot/percepcion/voz.py` |
+| Soldering routine over a recorded PCB (grid of points, FK/IK) | Works on the real robot | `real_robot/robot/pcb_plan.py` |
+| Keyboard supervisor with CSV logging | Works on the real robot | `real_robot/supervisor/keyboard_supervisor.py` |
+| Facial expression to stress (GPU) | Works live with a webcam, not yet driving the real robot | `real_robot/perception/face.py` |
+| Voice emotion to stress (GPU), English model | Works live with a microphone, not yet driving the real robot | `real_robot/perception/voice.py` |
 | Trust index `T(t)` and NORMAL / CAUTIOUS / PAUSED state machine | Works live with a simulated robot, not yet on the real robot | `real_robot/supervisor/` |
-| Operator screen | Works live with a simulated robot, not yet on the real robot | `real_robot/pantalla/` |
-| Spoken dialogue, task narration and voice commands ("stop", "slow down") | Works live with a simulated robot, not yet on the real robot | `real_robot/dialogo/` |
-| Hands near the PCB: stop, move away, wait for "continue" (YOLO hand detector) | Tested with recorded commands and a simulated robot; not yet with the lab camera or the real robot | `real_robot/percepcion/manos.py` |
+| Operator screen | Works live with a simulated robot, not yet on the real robot | `real_robot/screen/` |
+| Spoken dialogue, task narration and voice commands ("stop", "slow down") | Works live with a simulated robot, not yet on the real robot | `real_robot/dialogue/` |
+| Hands near the PCB: stop, move away, wait for "continue" (YOLO hand detector) | Tested with a simulated robot and simulated hand messages; not yet with the lab camera or the real robot | `real_robot/perception/hands.py` |
 | Hand detection (MediaPipe) | ROS 2 package, not integrated with the real robot | `aided_building_ws/src/aided_building_hand_perception/` |
 | Gazebo simulation of an FR3 | Simulation only | `aided_building_ws/` |
 
@@ -39,7 +39,8 @@ per-participant calibration, and the user study.
 | Edilberto | Gripper interface (`aided_building_gripper`) and `real.launch.py` | Gripper simulated in Gazebo; `real.launch.py` needs `franka_ros2`, which does not work with the lab's Panda |
 
 Joab built the facial expression recognition (mini-Xception on FER-2013, ROB311 lab); it was converted
-from Keras to PyTorch here.
+from Keras to PyTorch here. He also integrated the team's YOLO hand detector (hands near the PCB) and
+translated `real_robot/` to English.
 
 ## Why two software stacks
 
@@ -59,10 +60,10 @@ Moving the supervisor to ROS 2 nodes, to join both stacks, is a possible later p
 real_robot/              code for the lab's robot (see its README)
   robot/                   controller, kinematics, pose recording (runs in Docker)
   supervisor/              trust index, state machine, keyboard control
-  percepcion/              face and voice models
-  pantalla/                operator screen
-  dialogo/                 robot speech and voice commands
-  datos/                   recorded poses, PCB corners, ArUco positions
+  perception/              face, voice and hand models
+  screen/                  operator screen
+  dialogue/                robot speech and voice commands
+  data/                    recorded poses, PCB corners, ArUco positions
 aided_building_ws/       ROS 2 + Gazebo workspace (simulation)
 proj-idea.md             original project concept
 ```
@@ -71,6 +72,6 @@ proj-idea.md             original project concept
 
 This is a course prototype, not a certified system. Someone must hold the emergency stop whenever the
 robot is active. Voice "stop" is an additional channel, never the main one. Hand detection
-(`real_robot/percepcion/manos.py`) stops the robot and moves it away when hands come near the PCB, but it has
+(`real_robot/perception/hands.py`) stops the robot and moves it away when hands come near the PCB, but it has
 not been validated in the lab and only watches the PCB zone, not the whole arm. No validation against ISO/TS 15066
 has been done.
