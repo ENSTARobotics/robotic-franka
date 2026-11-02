@@ -7,18 +7,22 @@ PORT=8765
 URL=http://127.0.0.1:$PORT/
 
 if [ "$1" = --install ]; then
-    mkdir -p ~/.local/share/applications
-    cat > ~/.local/share/applications/aided-building-panel.desktop <<EOF
+    # The icon goes into the icon theme: GNOME's app grid keeps an absolute-path icon cached
+    mkdir -p ~/.local/share/applications ~/.local/share/icons/hicolor/scalable/apps
+    cp "$DIR/icon.svg" ~/.local/share/icons/hicolor/scalable/apps/aided-building.svg
+    rm -f ~/.local/share/applications/aided-building-panel.desktop     # the old name, with the old icon
+    cat > ~/.local/share/applications/aided-building.desktop <<EOF
 [Desktop Entry]
 Type=Application
 Name=Aided Building
 Comment=Control panel for the soldering robot
 Exec=$DIR/open_panel.sh
-Icon=$DIR/icon.svg
+Icon=aided-building
 StartupWMClass=chrome-127.0.0.1__-Default
 Terminal=false
 Categories=Development;
 EOF
+    update-desktop-database -q ~/.local/share/applications 2>/dev/null
     echo "Added: look for \"Aided Building\" in the app menu (Super key)."
     exit 0
 fi
