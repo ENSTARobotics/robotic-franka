@@ -89,6 +89,10 @@ python3 supervisor/supervisor.py --v-normal 0.6 --v-cautious 0.3
 The supervisor starts in MANUAL and PAUSED, so the robot does not move until you allow it: `a` (or
 answering *yes*) enables automatic mode; `n`, `c`, `p`, `r` take manual control at once.
 
+**Calibration.** Press `k` in the supervisor with the operator calm, looking at the camera and talking normally.
+For 20 s, with the robot paused and voice orders ignored, it measures each sensor's normal stress level for this
+person; afterwards only stress above that level counts. Repeat it for each person: it is not saved between sessions.
+
 **How `T(t)` is computed.** Each sensor sends `{"fuente": "rostro"|"audio", "estres": 0..1, "confianza": 0..1}`.
 
 - Stress weights, the same for face and voice: fear, anger, disgust 1; sadness 0.6; surprise 0.5;
@@ -97,7 +101,8 @@ answering *yes*) enables automatic mode; `n`, `c`, `p`, `r` take manual control 
   window that contains speech.
 - In silence, `voz.py` repeats its last result while its confidence fades to 0 over 5 s, so it stays visible
   but stops counting. The background noise level is re-estimated continuously from the last 15 s.
-- The supervisor takes the confidence-weighted mean stress, and `T(t) = 1 - stress`, smoothed.
+- The supervisor takes the mean stress weighted by confidence and by sensor (face 70 %, voice 30 %), and
+  `T(t) = 1 - stress`, smoothed. A small prior toward "no stress" keeps one unsure sensor from pausing the robot.
 
 **State machine.** It goes down at once (`T < 0.6` CAUTIOUS, `T < 0.35` PAUSED) and up only after 2-3 s of
 calm. With no valid perception for more than 2 s, it goes to CAUTIOUS at most. Thresholds are a starting

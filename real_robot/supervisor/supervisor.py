@@ -8,7 +8,8 @@ de confianza.py, y manda el estado al controlador por UDP 5005, igual que
 supervisor_teclado.py. Envía un resumen a pantalla.py por UDP 5011.
 Órdenes de voz de dialogo.py (UDP 5013): empezar = a; pausa = p; lento = CAUTIOUS 20 s;
 seguir = automático desde CAUTIOUS 20 s. Mientras el robot habla, ignora la emoción de la voz.
-Teclas:  a = AUTOMÁTICO (el estado lo decide T(t))
+Teclas:  k = calibrar el nivel normal del operador (robot en pausa; ignora las órdenes de voz)
+         a = AUTOMÁTICO (el estado lo decide T(t))
          n / c / p / r = MANUAL: NORMAL / CAUTIOUS / PAUSED / RETRACT (anulan el automático)
          q = salir
 Arranca en MANUAL + PAUSED: el robot no se mueve hasta que pulses a (o n/c).
@@ -36,6 +37,7 @@ PUERTO_COMANDOS = 5013      # órdenes de dialogo.py (voz)
 PUERTO_DIALOGO = 5014       # resumen para dialogo.py
 HZ_PANEL = 10.0
 MARGEN_ECO = 0.5            # s tras hablar el robot en que se ignora la emoción de la voz
+CALIBRACION_S = 20.0        # s que dura la calibración con la tecla k
 S_VOZ_LENTO = 20.0          # s que dura un "slow down" / "continue" por voz antes de poder subir
 HZ = 20.0
 HZ_PANTALLA = 5.0           # redibujados por segundo como máximo (el envío UDP sigue a HZ)
@@ -48,7 +50,7 @@ COLOR = {"NORMAL": "\033[42;30m", "CAUTIOUS": "\033[43;30m", "PAUSED": "\033[41;
 RESET = "\033[0m"
 
 COLUMNAS = (["t_host", "tecla", "modo", "cmd_state", "cmd_speed_scale", "cmd_retract", "T", "estres",
-             "sin_datos", "motivo"]
+             "sin_datos", "motivo", "normal_rostro", "normal_audio"]
             + ["%s_%s" % (f, k) for f in FUENTES for k in ("estres", "confianza", "etiqueta", "edad_s")]
             + ["rob_edad_s", "rob_state", "rob_segment", "rob_action", "rob_speed_scale", "rob_event", "rob_done", "rob_error",
                "ee_x", "ee_y", "ee_z"])
@@ -103,6 +105,7 @@ def main():
 
     confianza, fsm = Confianza(), MaquinaEstados()
     modo, manual = "MANUAL", "PAUSED"
+    t_fin_calibracion, calibracion = None, ""   # calibracion: resultado de la última, para dialogo.py
     robot, t_robot, ultimo_evento = {}, None, None
     texto_prev, t_pantalla, t_flush, t_panel = "", 0.0, 0.0, 0.0
 
@@ -111,7 +114,7 @@ def main():
         sys.stdout.write("\r\033[K" + texto + "\n")
         texto_prev = ""
 
-    print("Supervisor de confianza. a = AUTOMÁTICO | n/c/p/r = manual NORMAL/CAUTIOUS/PAUSED/RETRACT"
+    print("Supervisor de confianza. k = calibrar | a = AUTOMÁTICO | n/c/p/r = manual NORMAL/CAUTIOUS/PAUSED/RETRACT"
           " | q = salir")
     print("NORMAL %.2f, CAUTIOUS %.2f. Empieza en MANUAL + PAUSED. Percepción en UDP %d. Log: %s\n"
           % (args.v_normal, args.v_cautious, PUERTO_PERCEPCION, ruta_csv))
@@ -130,14 +133,23 @@ def main():
                 tecla = os.read(fd, 32).decode("utf-8", "ignore")[-1:].lower()
                 if tecla == "q":
                     break
-                if tecla == "a":
+                if t_fin_calibracion is not None and (tecla in ("a", "k") or tecla in TECLAS):
+                    t_fin_calibracion, calibracion = None, "cancelada"
+                    confianza.cancelar_calibracion()
+                    linea("[calibración] cancelada")
+                if tecla == "k":
+                    modo, manual = "MANUAL", "PAUSED"
+                    t_fin_calibracion = t_tick + CALIBRACION_S
+                    confianza.empezar_calibracion()
+                    linea("[tecla k] calibrando %.0f s: mira a la cámara y habla con normalidad" % CALIBRACION_S)
+                elif tecla == "a":
                     modo = "AUTO"
                     linea("[tecla a] modo AUTOMÁTICO: el estado lo decide T(t)")
                 elif tecla in TECLAS:
                     modo, manual = "MANUAL", TECLAS[tecla]
                     linea("[tecla %s] modo MANUAL -> %s" % (tecla, color(manual)))
                 elif tecla.strip():
-                    linea("[tecla %r] no reconocida (a, n, c, p, r, q)" % tecla)
+                    linea("[tecla %r] no reconocida (k, a, n, c, p, r, q)" % tecla)
 
             # Órdenes de voz (dialogo.py); se registran en la columna "tecla" como voz:<orden>
             for m in leer_todo(sock_voz):
@@ -145,6 +157,8 @@ def main():
                 if orden == "hablando":
                     silencio_audio_hasta = float(m.get("hasta", 0.0)) + MARGEN_ECO
                     continue
+                if t_fin_calibracion is not None:
+                    continue                    # le pedimos que hable: un "yes" mal oído no debe arrancar el robot
                 if orden == "empezar":
                     modo = "AUTO"
                 elif orden == "pausa":
@@ -161,6 +175,14 @@ def main():
                     continue
                 tecla = "voz:" + orden
                 linea("[voz] %s -> modo %s, %s" % (orden, modo, color(fsm.estado if modo == "AUTO" else manual)))
+
+            if t_fin_calibracion is not None and t_tick >= t_fin_calibracion:
+                t_fin_calibracion = None
+                normal = confianza.terminar_calibracion()
+                faltan = [f for f in FUENTES if f not in normal]
+                calibracion = "ok" if not faltan else "sin_" + faltan[0] if normal else "sin_datos"
+                linea("[calibración] nivel normal: " + ", ".join(
+                    "%s %s" % (f, "%.2f" % normal[f] if f in normal else "sin datos, queda sin calibrar") for f in FUENTES))
 
             # Percepción -> T(t) -> máquina de estados (corre siempre, también en manual)
             for m in leer_todo(sock_perc):
@@ -198,8 +220,9 @@ def main():
                                   "confianza": m.get("confianza"), "valida": f in validas,
                                   "edad": round(t_tick - t_f, 2)}
                 panel = {"t": t_tick, "modo": modo, "estado": estado,
-                         "causa": fsm.causa if modo == "AUTO" else "manual", "motivo": cmd["reason"],
-                         "T": cmd["trust"], "fuentes": fuentes,
+                         "causa": "calibrando" if t_fin_calibracion is not None else
+                                  fsm.causa if modo == "AUTO" else "manual", "motivo": cmd["reason"],
+                         "calibracion": calibracion, "T": cmd["trust"], "fuentes": fuentes,
                          "robot": {"conectado": edad is not None and edad <= TIMEOUT_ROBOT,
                                    "segment": robot.get("segment", ""), "action": robot.get("action", ""),
                                    "seg_index": robot.get("seg_index", 0), "n_segments": robot.get("n_segments", 0),
@@ -233,7 +256,7 @@ def main():
             # CSV
             fila = [round(t_tick, 3), tecla, modo, cmd["state"], cmd["speed_scale"], cmd["retract"],
                     "" if T is None else round(T, 4), "" if confianza.estres is None else round(confianza.estres, 4),
-                    sin_datos, fsm.motivo]
+                    sin_datos, fsm.motivo, confianza.normal.get("rostro", ""), confianza.normal.get("audio", "")]
             for f in FUENTES:
                 if f in confianza.ultimo:
                     t_f, m = confianza.ultimo[f]

@@ -74,6 +74,13 @@ FRASES = {
     "retomo_lento": "Okay, continuing slowly.",
     "normal": "You seem relaxed again. Back to normal speed.",
     "fin": "All done. Thank you for working with me!",
+    "calibrar": "Calibrating. Please look at the camera and talk normally for a moment.",
+    "calibrado_ok": "Calibration done.",
+    "calibrado_sin_rostro": "Calibration done, but I could not see your face.",
+    "calibrado_sin_audio": "Calibration done, but I could not hear your voice.",
+    "calibrado_sin_datos": "Calibration failed. I could not see or hear you.",
+    "calibrado_cancelada": "Calibration cancelled.",
+    "empezar?": "Shall we begin?",
     # Cambios manuales desde el teclado del supervisor
     "manual_normal": "Okay, normal speed.",
     "manual_lento": "Okay, going slower.",
@@ -248,6 +255,7 @@ def main():
     pendiente = None                  # (aviso, estado al que se refiere): se dirá cuando toque
     t_orden_voz = 0.0                 # el resumen tarda en reflejar una orden de voz recién enviada
     placa, t_placa, t_conectado = None, 0.0, None   # placa = True / False / None (desconocido)
+    calibrando = False                # durante la calibración el operador habla: no se le hace caso
     ultima_etapa = None               # última etapa de la tarea anunciada
     try:
         while True:
@@ -269,6 +277,15 @@ def main():
                     pass
             if t_tick - t_placa > SIN_SUPERVISOR:
                 placa = None
+            if conectado and (resumen.get("causa") == "calibrando") != calibrando:
+                calibrando = not calibrando
+                if calibrando:
+                    voz.decir("calibrar", urgente=True)
+                else:
+                    resultado = resumen.get("calibracion", "ok")
+                    voz.decir("calibrado_" + resultado, urgente=resultado == "cancelada")
+                    if fase == "espera_inicio":
+                        voz.decir("empezar?")
 
             # Palabras oídas (o escritas)
             oidas = []
@@ -280,7 +297,7 @@ def main():
             for texto in oidas:
                 intencion = clasificar(texto)
                 print("\r\033[K[oído] %r -> %s" % (texto, intencion or "nada"))
-                if intencion is None or not conectado:
+                if intencion is None or not conectado or calibrando:
                     continue
                 t_orden_voz = t_tick
                 if intencion == "parar" and fase in ("trabajando", "pregunta_seguir", "espera_reanudar"):
@@ -347,7 +364,7 @@ def main():
                     if aviso:
                         pendiente = (aviso, actual)
                 elif resumen.get("modo") == "MANUAL" and previo is not None and actual != previo \
-                        and t_tick - t_orden_voz > 1.0:
+                        and t_tick - t_orden_voz > 1.0 and "calibrando" not in (actual[1], previo[1]):
                     aviso = {"NORMAL": "manual_normal", "CAUTIOUS": "manual_lento", "PAUSED": "manual_pausa",
                              "RETRACT": "manual_retirar"}.get(actual[0])
                     if aviso:

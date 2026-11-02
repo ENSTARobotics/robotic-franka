@@ -55,6 +55,7 @@ MENSAJE = {
     ("CAUTIOUS", "voz"): "Voy más lento, como me pediste",
     ("PAUSED", "estres_alto"): "Me detuve: noto estrés. Tómate un momento",
     ("PAUSED", "inicio"): "Listo para empezar",
+    ("PAUSED", "calibrando"): "Calibrando: mira a la cámara y habla con normalidad",
     ("NORMAL", "manual"): "Velocidad normal",
     ("CAUTIOUS", "manual"): "Voy más lento",
     ("PAUSED", "manual"): "En pausa",

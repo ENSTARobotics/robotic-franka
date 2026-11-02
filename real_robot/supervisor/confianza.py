@@ -8,6 +8,9 @@ Una fuente cuenta sólo si su último mensaje tiene menos de EDAD_MAX s y confia
 CONF_PREVIA tira hacia "sin estrés" cuando hay poca confianza total: sin ella, una sola fuente con
 confianza 0.1 contaba como si fuera segura y paraba el robot por una falsa alarma.
 
+Calibración: el nivel normal de cada fuente es la mediana de su estrés mientras el operador está
+tranquilo, y luego sólo cuenta lo que lo supere: estrés' = max(0, estrés - normal) / (1 - normal).
+
 Máquina de estados (con histéresis):
     bajar es inmediato:  NORMAL -> CAUTIOUS si T < T_CAUTIOUS;  cualquiera -> PAUSED si T < T_PAUSA
     subir pide calma sostenida:  PAUSED -> CAUTIOUS si T > T_REANUDAR durante S_REANUDAR s
@@ -17,10 +20,12 @@ Los umbrales son un punto de partida: se ajustan con los datos del piloto.
 """
 import time
 
-PESOS = {"rostro": 1.0, "audio": 1.0}
+PESOS = {"rostro": 0.7, "audio": 0.3}
 EDAD_MAX = 1.0              # s: un mensaje más viejo no cuenta
 CONF_MIN = 0.05
-CONF_PREVIA = 0.2           # peso de la hipótesis "sin estrés" en la media
+CONF_PREVIA = 0.1           # peso de la hipótesis "sin estrés" en la media
+BASE_MAX = 0.8              # tope del nivel normal calibrado: por encima no quedaría margen para detectar
+MIN_MUESTRAS = 10           # muestras de una fuente para calibrarla; si no, se queda sin calibrar
 TAU_T = 0.5                 # s: suavizado de T(t)
 
 T_CAUTIOUS = 0.6            # T por debajo -> CAUTIOUS
@@ -37,6 +42,8 @@ class Confianza(object):
 
     def __init__(self):
         self.ultimo = {}            # fuente -> (t_recepcion, mensaje)
+        self.normal = {}            # fuente -> nivel de estrés normal de este operador
+        self.muestras = None        # fuente -> estrés recibido, mientras se calibra
         self.T = None
         self.estres = None
         self._t_previo = None
@@ -46,6 +53,22 @@ class Confianza(object):
         fuente = mensaje.get("fuente")
         if fuente:
             self.ultimo[fuente] = (time.time() if ahora is None else ahora, mensaje)
+            if self.muestras is not None and mensaje.get("estres") is not None and not mensaje.get("mantenido") \
+                    and float(mensaje.get("confianza") or 0.0) > CONF_MIN:
+                self.muestras.setdefault(fuente, []).append(float(mensaje["estres"]))
+
+    def empezar_calibracion(self):
+        self.muestras = {}
+
+    def cancelar_calibracion(self):
+        self.muestras = None        # se queda el nivel normal de la calibración anterior, si la hubo
+
+    def terminar_calibracion(self):
+        """Sustituye el nivel normal por el medido; una fuente con pocas muestras queda sin calibrar."""
+        self.normal = {fuente: min(BASE_MAX, sorted(valores)[len(valores) // 2])
+                       for fuente, valores in (self.muestras or {}).items() if len(valores) >= MIN_MUESTRAS}
+        self.muestras = None
+        return dict(self.normal)
 
     def validas(self, ahora):
         """{fuente: (estres, confianza)} de las fuentes que cuentan ahora mismo."""
@@ -53,7 +76,8 @@ class Confianza(object):
         for fuente, (t, m) in self.ultimo.items():
             estres, conf = m.get("estres"), float(m.get("confianza") or 0.0)
             if ahora - t <= EDAD_MAX and estres is not None and conf > CONF_MIN:
-                out[fuente] = (min(1.0, max(0.0, float(estres))), min(1.0, conf))
+                base = self.normal.get(fuente, 0.0)
+                out[fuente] = (min(1.0, max(0.0, (float(estres) - base) / (1.0 - base))), min(1.0, conf))
         return out
 
     def actualizar(self, ahora=None):

@@ -105,6 +105,8 @@ sleep 3                                 # que la voz mida el ruido de fondo ante
 pestana Dialogo "'$PY' '$DIR/dialogo/dialogo.py'"
 
 echo
-echo "Listo. Quédate en silencio unos segundos y contesta al robot: 'yes' para empezar."
+echo "Listo. Quédate en silencio unos segundos."
+echo "Para calibrar a esta persona: k en la pestaña Supervisor, antes de empezar."
+echo "Contesta al robot: 'yes' para empezar."
 echo "Para parar: p en la pestaña Supervisor, o el paro de emergencia."
 echo "Para apagar: q en Supervisor y Ctrl+C en Stack; luego, en Desk, desactiva la FCI y bloquea las articulaciones."
