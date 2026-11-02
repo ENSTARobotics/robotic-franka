@@ -182,6 +182,8 @@ def main():
                    help="s it takes to go up %.0f cm (default %.1f)" % (RETRACT_M * 100, RETRACT_DUR))
     p.add_argument("--max-scale", type=float, default=0.3,
                    help="cap on speed_scale (default 0.3, first test)")
+    p.add_argument("--yes", action="store_true",
+                   help="do not ask for Enter before starting (the control panel asks instead)")
     pcb_plan.add_arguments(p)
     args = p.parse_args()
     if not 0.0 < args.max_scale <= 1.0:
@@ -227,7 +229,8 @@ def main():
     print("First segment: from the current position to '%s' (max. dist. %.2f rad)."
           % (plan[0]["name"], max_dist(fa.get_joints(), plan[0]["q"])))
     print("The robot only moves if the supervisor sends NORMAL/CAUTIOUS.")
-    input("Emergency stop in your hand. Press Enter to start (Ctrl+C to quit)... ")
+    if not args.yes:
+        input("Emergency stop in your hand. Press Enter to start (Ctrl+C to quit)... ")
 
     idx = 0                  # current segment in plan
     q_segment_start = None   # None = the segment has not started yet

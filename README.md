@@ -23,6 +23,7 @@ follow [`real_robot/SETUP.md`](real_robot/SETUP.md).
 | Operator screen | Works live with a simulated robot, not yet on the real robot | `real_robot/screen/` |
 | Spoken dialogue, task narration and voice commands ("stop", "slow down") | Works live with a simulated robot, not yet on the real robot | `real_robot/dialogue/` |
 | Hands near the PCB: stop, move away, wait for "continue" (YOLO hand detector) | Tested with a simulated robot and simulated hand messages; not yet with the lab camera or the real robot | `real_robot/perception/hands.py` |
+| Control panel: start, run and stop everything from one window | Tested in simulation; not yet with the real robot | `real_robot/panel/` |
 | Hand detection (MediaPipe) | ROS 2 package, not integrated with the real robot | `aided_building_ws/src/aided_building_hand_perception/` |
 | Gazebo simulation of an FR3 | Simulation only | `aided_building_ws/` |
 

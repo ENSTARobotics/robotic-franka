@@ -11,7 +11,8 @@ resume = automatic from CAUTIOUS 20 s. While the robot speaks, the voice emotion
 Hands (perception/hands.py, UDP 5016): if there are hands next to the PCB when the robot was about
 to move, RETRACT (stops and goes up 5 cm) and it stays like that, in any mode, until the zone is
 clear AND the operator says "continue" (or presses a, n or c). Without hands.py open nothing is watched.
-Keys:  k = calibrate the operator's baseline (robot paused; voice orders are ignored)
+Keys (in its terminal, or {"key": "a"} over UDP 5017 from panel/panel.py):
+       k = calibrate the operator's baseline (robot paused; voice orders are ignored)
        a = AUTOMATIC (T(t) decides the state)
        n / c / p / r = MANUAL: NORMAL / CAUTIOUS / PAUSED / RETRACT (override automatic)
        q = quit
@@ -39,6 +40,8 @@ PANEL_PORT = 5011           # summary for screen.py
 COMMANDS_PORT = 5013        # orders from dialogue.py (voice)
 DIALOGUE_PORT = 5014        # summary for dialogue.py
 HANDS_PORT = 5016           # perception/hands.py
+CONTROL_PORT = 5017         # keys from the control panel (panel/panel.py)
+GUI_PORT = 5018             # summary for the control panel
 HANDS_MAX_AGE = 0.5         # s: an older hands message does not count
 PANEL_HZ = 10.0
 ECHO_MARGIN = 0.5           # s after the robot speaks in which the voice emotion is ignored
@@ -87,8 +90,7 @@ def main():
         os.path.dirname(os.path.abspath(__file__)), os.pardir, "logs")))
     args = p.parse_args()
     speed = {"NORMAL": args.v_normal, "CAUTIOUS": args.v_cautious, "PAUSED": 0.0, "RETRACT": 0.0}
-    if not sys.stdin.isatty():
-        sys.exit("[error] A terminal is needed to read the keyboard.")
+    keyboard = sys.stdin.isatty()      # without a terminal (started by the control panel), keys only over UDP
 
     os.makedirs(args.log_dir, exist_ok=True)
     csv_path = os.path.join(args.log_dir, time.strftime("supervisor_auto_%Y%m%d_%H%M%S.csv"))
@@ -109,6 +111,9 @@ def main():
     sock_hands = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock_hands.bind((IP, HANDS_PORT))
     sock_hands.setblocking(False)
+    sock_control = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock_control.bind((IP, CONTROL_PORT))
+    sock_control.setblocking(False)
     mute_audio_until = 0.0
     hands, t_hands = {}, None
     hands_lock = False          # hands next to the PCB: RETRACT until the zone is clear + "continue"
@@ -121,7 +126,8 @@ def main():
 
     def line(text):
         nonlocal text_prev
-        sys.stdout.write("\r\033[K" + text + "\n")
+        sys.stdout.write(("\r\033[K" if keyboard else "") + text + "\n")
+        sys.stdout.flush()
         text_prev = ""
 
     print("Trust supervisor. k = calibrate | a = AUTOMATIC | n/c/p/r = manual NORMAL/CAUTIOUS/PAUSED/RETRACT"
@@ -129,9 +135,12 @@ def main():
     print("NORMAL %.2f, CAUTIOUS %.2f. Starts in MANUAL + PAUSED. Perception on UDP %d. Log: %s\n"
           % (args.v_normal, args.v_cautious, PERCEPTION_PORT, csv_path))
 
-    fd = sys.stdin.fileno()
-    terminal_config = termios.tcgetattr(fd)
-    tty.setcbreak(fd)
+    if keyboard:
+        fd = sys.stdin.fileno()
+        terminal_config = termios.tcgetattr(fd)
+        tty.setcbreak(fd)
+    else:
+        print("No terminal: keys only over UDP %d (control panel)." % CONTROL_PORT)
     period = 1.0 / HZ
     try:
         while True:
@@ -153,11 +162,15 @@ def main():
                 line("[hands] zone clear and %s: resuming" % origin)
                 return True
 
-            # Keyboard
-            key = ""
-            if select.select([fd], [], [], 0)[0]:
-                key = os.read(fd, 32).decode("utf-8", "ignore")[-1:].lower()
+            # Keyboard and control panel
+            keys = []
+            if keyboard and select.select([fd], [], [], 0)[0]:
+                keys.append(os.read(fd, 32).decode("utf-8", "ignore")[-1:].lower())
+            keys += [str(m.get("key", ""))[:1].lower() for m in read_all(sock_control)]
+            key, quit_now = "", False
+            for key in keys:
                 if key == "q":
+                    quit_now = True
                     break
                 if t_calibration_end is not None and (key in ("a", "k") or key in KEYS):
                     t_calibration_end, calibration = None, "cancelled"
@@ -178,6 +191,8 @@ def main():
                     line("[key %r] not recognized (k, a, n, c, p, r, q)" % key)
                 if hands_lock and key in ("a", "n", "c"):
                     release_hands("key " + key)
+            if quit_now:
+                break
 
             # Voice orders (dialogue.py); logged in the "key" column as voice:<order>
             for m in read_all(sock_voice):
@@ -263,11 +278,12 @@ def main():
                 panel = {"t": t_tick, "mode": mode, "state": state, "cause": cause, "reason": cmd["reason"],
                          "calibration": calibration, "T": cmd["trust"], "sources": sources,
                          "hands": {"watching": watching, "near": hands_near, "lock": hands_lock},
+                         "event": last_event or "",
                          "robot": {"connected": age is not None and age <= ROBOT_TIMEOUT,
                                    "segment": robot.get("segment", ""), "action": robot.get("action", ""),
                                    "seg_index": robot.get("seg_index", 0), "n_segments": robot.get("n_segments", 0),
                                    "done": robot.get("done", False)}}
-                for port in (PANEL_PORT, DIALOGUE_PORT):
+                for port in (PANEL_PORT, DIALOGUE_PORT, GUI_PORT):
                     sock_cmd.sendto(json.dumps(panel).encode("utf-8"), (IP, port))
 
             # Terminal screen
@@ -290,7 +306,7 @@ def main():
                          "\033[44;37m say continue \033[0m" if hands_lock else "" if watching else "hands --")
             text = "\r\033[K%-6s %s %s | %s | %s %s" % (mode, T_txt, color(state),
                                                        ", ".join(sources_txt) or "no perception", rob_txt, hands_txt)
-            if text != text_prev and t_tick - t_screen >= 1.0 / SCREEN_HZ:
+            if keyboard and text != text_prev and t_tick - t_screen >= 1.0 / SCREEN_HZ:
                 sys.stdout.write(text)
                 sys.stdout.flush()
                 text_prev, t_screen = text, t_tick
@@ -323,7 +339,8 @@ def main():
                                         "retract": False, "state": "PAUSED"}).encode("utf-8"),
                             (IP, CMD_PORT))
             time.sleep(0.02)
-        termios.tcsetattr(fd, termios.TCSADRAIN, terminal_config)
+        if keyboard:
+            termios.tcsetattr(fd, termios.TCSADRAIN, terminal_config)
         f_csv.close()
         print("\nSupervisor closed (last command: PAUSED). Log in %s" % csv_path)
 

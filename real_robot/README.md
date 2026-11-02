@@ -47,15 +47,43 @@ dialogue/                 runs on the host
   download_models.py      downloads the Piper voice and Vosk model (not in git)
 data/                     poses.json (rad), pose_info.json (tool tip and PCB corners),
                           table.json (ArUco markers, robot base frame)
+panel/                    control panel: panel.py (server), index.html (page), open_panel.sh
 launch.sh                 opens everything in terminal tabs (see Quick start)
 logs/                     one CSV per session (not in git)
 ```
 
 Everything is in English: program names, command-line options, code comments, the operator screen and the robot's speech.
 
-## Quick start
+## Control panel (recommended)
 
-Start from the **Ubuntu Terminal (Ctrl+Alt+T), not from the VS Code terminal**: `launch.sh` opens its programs in
+One window to start, run and stop everything, without typing commands:
+
+```bash
+panel/open_panel.sh --install    # once: adds "Aided Building" to the Ubuntu app menu
+```
+
+Then open **Aided Building** from the app menu (Super key), or run `panel/open_panel.sh`. It opens a Chrome app
+window served by `panel/panel.py` on `127.0.0.1:8765` (standard library only).
+
+1. **Setup:** real robot or simulated, PCB points or pose cycle, slow (0.3) or normal (0.6) speed, and which
+   programs to run (face, voice, hands + PCB check, operator screen, robot speech). The checks show the link
+   speed and ping to the robot, the Docker container and the frankapy stack.
+2. **Start system:** starts the container and the stack, waits for `stack ready`, then the controller, the
+   supervisor and the chosen programs. The robot waits PAUSED.
+3. **Routine:** *Calibrate operator* (k), *Start routine* (automatic; manual normal if face and voice are off),
+   *Pause* (space), *Continue* (also after hands near the PCB), *Manual: normal / slower*, *Move away* (r) and
+   *Restart routine* (the controller starts again from home). The state, trust, face, voice, hands and robot
+   progress update live, and each program's log is one click away.
+4. **Stop all** (the supervisor first, so it sends PAUSED), or *Stop all and close*.
+
+Tools: *Communication test* (turns the wrist 20°), *Check PCB plan* and *Open Desk*. Before starting the real
+robot, Desk still needs joints unlocked and FCI active, and someone holds the emergency stop. Without the docker
+group (see [SETUP.md](SETUP.md#3-code-and-docker-with-frankapy-ros-1)), each Docker step asks for your password in
+a system window. Pose recording (`robot/record_poses.py`) is still done in a terminal.
+
+## Quick start (terminal tabs)
+
+The same without the panel. Start from the **Ubuntu Terminal (Ctrl+Alt+T), not from the VS Code terminal**: `launch.sh` opens its programs in
 `gnome-terminal` tabs, and those do not open from VS Code, so the script stops and tells you.
 
 Before starting: in Desk, joints unlocked (blue light) and FCI active; emergency stop in your hand.

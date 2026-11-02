@@ -1,0 +1,329 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Aided Building panel</title>
+<style>
+  :root {
+    --bg: #18191d; --card: #222429; --line: #33363d; --text: #ececec; --muted: #9a9ca3;
+    --green: #2ea043; --yellow: #e6a014; --red: #c83232; --blue: #286ec8; --gray: #5a5c63;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.4 system-ui, sans-serif; }
+  header { display: flex; align-items: center; gap: 16px; padding: 12px 20px; border-bottom: 1px solid var(--line); }
+  header h1 { font-size: 18px; margin: 0; font-weight: 600; }
+  #busy { color: var(--yellow); font-size: 14px; }
+  main { display: grid; grid-template-columns: 300px 1fr 330px; gap: 16px; padding: 16px 20px; }
+  @media (max-width: 1100px) { main { grid-template-columns: 1fr; } }
+  section { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 10px; }
+  .col { display: flex; flex-direction: column; gap: 16px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  label { display: flex; align-items: center; gap: 8px; margin: 4px 0; cursor: pointer; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; margin: 4px 0 8px; }
+  .seg button { border: 0; border-radius: 0; background: transparent; padding: 6px 12px; }
+  .seg button.on { background: var(--blue); }
+  button { background: #2f3239; color: var(--text); border: 1px solid var(--line); border-radius: 8px;
+           padding: 9px 14px; font: inherit; cursor: pointer; }
+  button:hover:not(:disabled) { filter: brightness(1.2); }
+  button:disabled { opacity: .45; cursor: default; }
+  .big { font-size: 17px; font-weight: 600; padding: 14px 18px; flex: 1; min-width: 140px; }
+  .go { background: var(--green); border-color: var(--green); }
+  .stop { background: var(--red); border-color: var(--red); }
+  .warn { background: var(--yellow); border-color: var(--yellow); color: #111; }
+  .blue { background: var(--blue); border-color: var(--blue); }
+  .key { font-size: 11px; opacity: .7; margin-left: 6px; }
+  #state { border-radius: 10px; padding: 16px 18px; background: var(--gray); }
+  #state .title { font-size: 34px; font-weight: 700; }
+  #state .reason { font-size: 15px; opacity: .95; }
+  .bar { height: 12px; background: #3a3d44; border-radius: 6px; overflow: hidden; }
+  .bar > div { height: 100%; width: 0; background: var(--blue); transition: width .3s; }
+  .kv { display: grid; grid-template-columns: 110px 1fr; gap: 6px 10px; align-items: center; }
+  .kv .k { color: var(--muted); }
+  .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; background: var(--gray); flex: none; }
+  .dot.ok { background: var(--green); } .dot.bad { background: var(--red); } .dot.wait { background: var(--yellow); }
+  .proc { display: flex; align-items: center; gap: 8px; padding: 6px 4px; border-bottom: 1px solid var(--line); cursor: pointer; }
+  .proc:last-child { border-bottom: 0; }
+  .proc .name { flex: 1; }
+  .proc .last { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 150px; }
+  .proc.sel { background: #2b2e35; border-radius: 6px; }
+  pre { background: #111215; border: 1px solid var(--line); border-radius: 8px; padding: 10px; margin: 0;
+        height: 260px; overflow: auto; font: 12px/1.45 ui-monospace, monospace; white-space: pre-wrap; }
+  .check { display: flex; gap: 8px; align-items: center; margin: 3px 0; }
+  .muted { color: var(--muted); font-size: 13px; }
+  #toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: #333640;
+           border: 1px solid var(--line); padding: 10px 16px; border-radius: 8px; display: none; }
+  #hands { padding: 10px 12px; border-radius: 8px; background: #2b2e35; }
+  #hands.near { background: var(--red); } #hands.lock { background: var(--blue); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Aided Building · control panel</h1>
+  <span id="busy"></span>
+  <span style="flex:1"></span>
+  <button onclick="post({action:'open_desk'})">Open Desk</button>
+  <button class="stop" onclick="quitPanel()">Stop all and close</button>
+</header>
+
+<main>
+  <!-- Left: setup -->
+  <div class="col">
+    <section>
+      <h2>1 · Setup</h2>
+      <div class="muted">Robot</div>
+      <div class="seg" id="seg-sim">
+        <button data-v="false">Real robot</button><button data-v="true">Simulated</button>
+      </div>
+      <div class="muted">Task</div>
+      <div class="seg" id="seg-routine">
+        <button data-v="pcb">Points on the PCB</button><button data-v="cycle">Pose cycle</button>
+      </div>
+      <div class="muted">Speed</div>
+      <div class="seg" id="seg-speed">
+        <button data-v="slow">Slow (0.3)</button><button data-v="normal">Normal (0.6)</button>
+      </div>
+      <div class="muted">Programs</div>
+      <label><input type="checkbox" data-m="face"> Face (stress from the camera)</label>
+      <label><input type="checkbox" data-m="voice"> Voice (stress from the mic)</label>
+      <label><input type="checkbox" data-m="hands"> Hands + PCB check</label>
+      <label><input type="checkbox" data-m="screen"> Operator screen</label>
+      <label><input type="checkbox" data-m="dialogue"> Robot speech</label>
+    </section>
+    <section>
+      <h2>Checks</h2>
+      <div class="check"><span class="dot" id="c-net"></span><span id="t-net">network</span></div>
+      <div class="check"><span class="dot" id="c-docker"></span><span id="t-docker">docker</span></div>
+      <div class="check"><span class="dot" id="c-stack"></span><span id="t-stack">stack</span></div>
+      <p class="muted">Before starting the real robot: in Desk, joints unlocked (blue light) and FCI active.
+        Someone holds the emergency stop.</p>
+      <div class="row">
+        <button onclick="commTest()">Communication test</button>
+        <button onclick="post({action:'pcb_plan'}); showLog('pcb_plan')">Check PCB plan</button>
+      </div>
+    </section>
+  </div>
+
+  <!-- Center: run -->
+  <div class="col">
+    <section>
+      <h2>2 · System</h2>
+      <div class="row">
+        <button class="big go" id="b-start" onclick="post({action:'start_system'})">Start system</button>
+        <button class="big stop" onclick="post({action:'stop_all'})">Stop all</button>
+      </div>
+    </section>
+    <section>
+      <h2>3 · Routine</h2>
+      <div id="state"><div class="title" id="s-title">NOT CONNECTED</div><div class="reason" id="s-reason">Start the system</div></div>
+      <div class="row" style="margin-top:12px">
+        <button class="big go" id="b-auto" onclick="startRoutine()">Start routine<span class="key">A</span></button>
+        <button class="big warn" onclick="key('p')">Pause<span class="key">P / space</span></button>
+        <button class="big blue" id="b-continue" onclick="resume()">Continue<span class="key">C</span></button>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <button onclick="manual('n')">Manual: normal<span class="key">N</span></button>
+        <button onclick="manual('c')">Manual: slower<span class="key">S</span></button>
+        <button onclick="key('r')">Move away<span class="key">R</span></button>
+        <button onclick="key('k')">Calibrate operator<span class="key">K</span></button>
+        <button onclick="restartRoutine()">Restart routine</button>
+      </div>
+      <div style="margin-top:14px" class="kv">
+        <span class="k">Robot</span><span id="r-text">–</span>
+        <span class="k">Progress</span><div class="bar"><div id="r-bar"></div></div>
+        <span class="k">Trust T(t)</span><div class="bar"><div id="t-bar" style="background:var(--green)"></div></div>
+        <span class="k">Face</span><span id="f-text">–</span>
+        <span class="k">Voice</span><span id="v-text">–</span>
+        <span class="k">Mode</span><span id="m-text">–</span>
+      </div>
+      <div id="hands" style="margin-top:12px">Hands: –</div>
+    </section>
+    <section>
+      <h2>Log · <span id="log-title">events</span></h2>
+      <pre id="log"></pre>
+    </section>
+  </div>
+
+  <!-- Right: programs -->
+  <div class="col">
+    <section>
+      <h2>Programs <span class="muted">(click to see the log)</span></h2>
+      <div class="proc" data-p="events"><span class="dot ok"></span><span class="name">Panel events</span></div>
+      <div id="procs"></div>
+    </section>
+  </div>
+</main>
+<div id="toast"></div>
+
+<script>
+const TOKEN = "{{TOKEN}}";
+const MODULES = ["face", "voice", "hands", "screen", "dialogue"];
+const COLORS = {NORMAL: "var(--green)", CAUTIOUS: "var(--yellow)", PAUSED: "var(--red)", RETRACT: "var(--blue)"};
+const TITLES = {NORMAL: "WORKING", CAUTIOUS: "SLOWER", PAUSED: "STOPPED", RETRACT: "MOVING AWAY"};
+let status = null, logName = "events";
+let runKey = "a";      // what Start routine / Continue send: automatic, or manual normal without face and voice
+
+async function api(path, body) {
+  const opt = {headers: {"X-Token": TOKEN}};
+  if (body) { opt.method = "POST"; opt.body = JSON.stringify(body); opt.headers["Content-Type"] = "application/json"; }
+  const r = await fetch(path, opt);
+  return r.json();
+}
+async function post(body) {
+  const r = await api("/api/action", body);
+  if (r.result && r.result !== "ok") toast(r.result);
+  refresh();
+  return r;
+}
+function toast(text) {
+  const t = document.getElementById("toast");
+  t.textContent = text; t.style.display = "block";
+  clearTimeout(t.timer); t.timer = setTimeout(() => t.style.display = "none", 3500);
+}
+function key(k) { post({action: "key", key: k}); }
+function startRoutine() {
+  if (status && !status.settings.simulated &&
+      !confirm("Emergency stop in someone's hand?\nJoints unlocked and FCI active in Desk?\nHands off the PCB?")) return;
+  // Automatic mode needs face or voice: without them the trust state machine never leaves PAUSED
+  const m = status ? status.settings.modules : {};
+  runKey = (m.face && status.processes.face.running) || (m.voice && status.processes.voice.running) ? "a" : "n";
+  if (runKey === "n") toast("Face and voice are off: starting in manual mode, normal speed");
+  key(runKey);
+}
+function manual(k) { runKey = k; key(k); }
+function resume() { key(runKey); }
+function restartRoutine() {
+  if (confirm("Restart the routine? The robot pauses, goes back to the start and waits for Start routine.")) post({action: "restart_routine"});
+}
+function commTest() {
+  if (confirm("The wrist turns 20 degrees and back. Emergency stop in hand and nothing near the pen?")) {
+    post({action: "comm_test"}); showLog("comm_test");
+  }
+}
+function quitPanel() {
+  if (confirm("Stop every program and close the panel?")) { post({action: "quit"}); setTimeout(() => window.close(), 500); }
+}
+function showLog(name) { logName = name; refreshLog(); }
+
+// Setup controls
+function bindSeg(id, field, parse) {
+  document.querySelectorAll("#" + id + " button").forEach(b => b.onclick = () =>
+    post({action: "settings", [field]: parse(b.dataset.v)}));
+}
+bindSeg("seg-sim", "simulated", v => v === "true");
+bindSeg("seg-routine", "routine", v => v);
+bindSeg("seg-speed", "speed", v => v);
+document.querySelectorAll("input[data-m]").forEach(c => c.onchange = () => {
+  post({action: "settings", modules: {[c.dataset.m]: c.checked}});
+  if (status && status.processes.supervisor.running) post({action: "module", name: c.dataset.m, on: c.checked});
+});
+document.querySelector('.proc[data-p="events"]').onclick = () => showLog("events");
+
+// Keyboard shortcuts (not while typing)
+document.addEventListener("keydown", e => {
+  if (e.ctrlKey || e.altKey || e.metaKey) return;
+  const k = e.key.toLowerCase();
+  if (k === " " ) { e.preventDefault(); key("p"); }
+  else if (k === "a") startRoutine();
+  else if (k === "p") key("p");
+  else if (k === "c") resume();
+  else if (k === "n") manual("n");
+  else if (k === "s") manual("c");
+  else if (k === "r") key("r");
+  else if (k === "k") key("k");
+});
+
+function setDot(id, cls, text, textId) {
+  document.getElementById(id).className = "dot " + cls;
+  if (textId) document.getElementById(textId).textContent = text;
+}
+
+function render(s) {
+  status = s;
+  document.getElementById("busy").textContent = s.busy ? "⏳ " + s.busy + "…" : "";
+  document.getElementById("b-start").disabled = !!s.busy;
+  const seg = (id, v) => document.querySelectorAll("#" + id + " button").forEach(b => b.classList.toggle("on", b.dataset.v === String(v)));
+  seg("seg-sim", s.settings.simulated); seg("seg-routine", s.settings.routine); seg("seg-speed", s.settings.speed);
+  document.querySelectorAll("input[data-m]").forEach(c => c.checked = !!s.settings.modules[c.dataset.m]);
+
+  // Checks
+  const n = s.network || {};
+  if (s.settings.simulated) setDot("c-net", "", "network: not needed (simulated)", "t-net");
+  else if (n.ping_ms == null) setDot("c-net", "bad", "robot not reachable (cable? IP 147.250.35.100?)", "t-net");
+  else setDot("c-net", n.speed === 1000 && n.ping_ms < 1 ? "ok" : "wait",
+              `${n.iface}: ${n.speed || "?"} Mb/s, ping ${n.ping_ms.toFixed(2)} ms` + (n.speed !== 1000 ? " (must be 1000)" : ""), "t-net");
+  const d = s.docker || {};
+  if (s.settings.simulated) setDot("c-docker", "", "docker: not needed (simulated)", "t-docker");
+  else if (d.ok === false) setDot("c-docker", "wait", "docker asks for your password (see SETUP: docker group)", "t-docker");
+  else setDot("c-docker", d.container === true ? "ok" : "wait", d.container === "missing" ? "franka_container does not exist (SETUP step 3)" :
+              d.container ? "franka_container running" : "franka_container stopped", "t-docker");
+  setDot("c-stack", d.stack ? "ok" : "", d.stack ? "frankapy stack running" : "frankapy stack not running", "t-stack");
+
+  // State
+  const sum = s.summary;
+  const box = document.getElementById("state");
+  if (!sum) {
+    box.style.background = "var(--gray)";
+    document.getElementById("s-title").textContent = s.processes.supervisor.running ? "WAITING" : "NOT CONNECTED";
+    document.getElementById("s-reason").textContent = s.processes.supervisor.running ? "waiting for the supervisor" : "Start the system";
+  } else {
+    box.style.background = COLORS[sum.state] || "var(--gray)";
+    document.getElementById("s-title").textContent = TITLES[sum.state] || sum.state;
+    document.getElementById("s-reason").textContent = (sum.cause === "calibrating" ? "calibrating: look at the camera and talk normally" : sum.reason || "") +
+      (sum.event ? "  ·  robot: " + sum.event : "");
+    const r = sum.robot || {};
+    document.getElementById("r-text").textContent = !r.connected ? "controller not connected" : r.done ? "routine finished" :
+      `${r.segment || "–"} (${(r.seg_index || 0) + 1}/${r.n_segments || 0}) ${r.action || "still"}`;
+    document.getElementById("r-bar").style.width = r.n_segments ? (100 * (r.done ? 1 : r.seg_index / r.n_segments)) + "%" : "0";
+    document.getElementById("t-bar").style.width = sum.T == null ? "0" : (100 * sum.T) + "%";
+    const src = (x, empty) => !x ? empty : `${x.label || "–"}  stress ${x.stress == null ? "–" : x.stress.toFixed(2)}  conf ${(+x.confidence || 0).toFixed(2)}${x.valid ? "" : " (not counted)"}`;
+    document.getElementById("f-text").textContent = src((sum.sources || {}).face, "no data");
+    document.getElementById("v-text").textContent = src((sum.sources || {}).audio, "no data");
+    document.getElementById("m-text").textContent = sum.mode === "AUTO" ? "automatic (trust decides)" : "manual";
+    const h = sum.hands || {}, hb = document.getElementById("hands");
+    hb.className = h.near ? "near" : h.lock ? "lock" : "";
+    hb.textContent = !h.watching ? "Hands: not watched (Hands program off or markers not seen)" :
+      h.near ? "✋ Hands near the PCB: the robot moved away. Move them away." :
+      h.lock ? "Zone clear: press Continue (or say \"continue\") to go on." : "Hands: zone clear";
+    document.getElementById("b-continue").classList.toggle("go", !!h.lock && !h.near);
+  }
+
+  // Programs
+  const list = document.getElementById("procs");
+  const names = ["stack", "controller", "supervisor", ...MODULES, "comm_test", "pcb_plan"];
+  list.innerHTML = "";
+  for (const name of names) {
+    const p = s.processes[name];
+    const div = document.createElement("div");
+    div.className = "proc" + (logName === name ? " sel" : "");
+    const cls = p.running ? "ok" : p.code == null ? "" : p.code === 0 ? "" : "bad";
+    div.innerHTML = `<span class="dot ${cls}"></span><span class="name"></span><span class="last"></span>`;
+    div.querySelector(".name").textContent = p.title;
+    div.querySelector(".last").textContent = p.running ? p.last : p.code == null ? "not started" : "finished (" + p.code + ")";
+    div.onclick = () => showLog(name);
+    list.appendChild(div);
+  }
+  document.querySelector('.proc[data-p="events"]').classList.toggle("sel", logName === "events");
+}
+
+async function refreshLog() {
+  const r = await api("/api/log?name=" + encodeURIComponent(logName));
+  const pre = document.getElementById("log");
+  const atBottom = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 20;
+  pre.textContent = (r.lines || []).join("\n");
+  if (atBottom) pre.scrollTop = pre.scrollHeight;
+  document.getElementById("log-title").textContent = logName === "events" ? "panel events" :
+    (status ? status.processes[logName].title : logName);
+}
+async function refresh() {
+  try { render(await api("/api/status")); } catch (e) {
+    document.getElementById("busy").textContent = "⚠ the panel server is not running";
+  }
+}
+setInterval(refresh, 600);
+setInterval(refreshLog, 1000);
+refresh(); refreshLog();
+</script>
+</body>
+</html>

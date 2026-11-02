@@ -73,6 +73,14 @@ sudo docker start franka_container
 sudo docker exec -it franka_container bash      # once per terminal
 ```
 
+Optional, so that the control panel does not ask for your password at each Docker step: add your user to
+the `docker` group and log out and back in. Members of this group can control Docker without a password, which
+amounts to root access on this computer: do it only on your own laptop.
+
+```bash
+sudo usermod -aG docker $USER
+```
+
 ## 4. Host programs (face, voice, hands, screen and dialogue)
 
 The keyboard supervisor needs none of this, and the controller runs in the container. Without an NVIDIA
