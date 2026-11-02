@@ -10,8 +10,8 @@ stack and the controller in Docker (or the simulated controller), supervisor.py 
 (keys go over UDP 5017), and face, voice, hands, screen and dialogue. It reads the supervisor's summary
 on UDP 5018 to show the state.
 
-Docker: if your user cannot use docker, each Docker step asks for your password in a system window
-(pkexec). To avoid that, see SETUP.md (docker group).
+Docker: if your user cannot use docker, it goes through sudo, which asks for your password once in a
+window (askpass.sh) and remembers it while the panel runs. Without any password: SETUP.md (docker group).
 
 Safety: it only listens on 127.0.0.1, and every action needs the token embedded in the page, so other
 web pages cannot drive the robot. The emergency stop is still the main stop.
@@ -48,10 +48,20 @@ PORT = 8765
 CONTROL_PORT = 5017         # keys for supervisor.py
 HANDS_PORT = 5016           # hands messages for supervisor.py (virtual hands, simulated only)
 VIRTUAL_HAND_R = 0.04       # m, radius of a virtual hand on the table
-VIRTUAL_POINT_R = 0.03      # m around each soldering point, like hands.py --point-radius-cm 3
+VIRTUAL_POINT_R = 0.02      # m around each soldering point, like hands.py --point-radius-cm 2
 GUI_PORT = 5018             # supervisor.py's summary
+CAMERA_PORT = 5020          # annotated image of the PCB camera, from perception/hands.py
+CAMERA_MAX_AGE = 2.0        # s: an older image is not shown
 LOG_LINES = 400
 STACK_TIMEOUT = 60.0        # s to wait for "stack ready"
+CONTROLLER_TIMEOUT = 20.0   # s for the controller to connect to the robot (frankapy itself gives up after 10 s)
+# Closes the stack in the container in reverse order; also what is left when franka_interface died alone
+STACK_STOP = ("pkill -INT -f '[c]ycle_controller'; pkill -INT -f '[c]ommunication_test'; "
+              "sleep 2; pkill -INT -f '[s]tart_stack.sh'; sleep 10; "
+              "pkill -INT -f '[f]ranka_gripper.launch'; sleep 2; "
+              "pkill -INT -f '[f]ranka_ros_interface.launch'; sleep 2; "
+              "pkill -INT -f 'build/[f]ranka_interface'; sleep 2; pkill -INT -x roscore")
+SUDO_KEEP_S = 240.0         # s between refreshes of sudo's remembered password (it forgets it after 15 min)
 ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
 MODULES = ["face", "voice", "hands", "screen", "dialogue"]
@@ -82,7 +92,8 @@ def sim_args(name):
             "hands": ["--frames-from-face", "--no-markers"], "dialogue": ["--device", mic]}.get(name, [])
 TITLES = {"stack": "frankapy stack", "controller": "Controller", "supervisor": "Supervisor", "face": "Face",
           "voice": "Voice", "hands": "Hands + PCB", "screen": "Operator screen", "dialogue": "Dialogue",
-          "comm_test": "Communication test", "pcb_plan": "PCB plan check"}
+          "comm_test": "Communication test", "recover": "Clear robot error", "gripper": "Gripper", "home": "Go home",
+          "pcb_plan": "PCB plan check"}
 KEYS = {"a": "automatic", "n": "manual normal", "c": "manual slower", "p": "pause", "r": "move away",
         "k": "calibrate"}
 
@@ -97,8 +108,17 @@ def docker_ok():
 
 
 def docker(*args):
-    """Docker command line: direct, or through pkexec (password window) without permission."""
-    return (["docker"] if docker_ok() else ["pkexec", "docker"]) + list(args)
+    """Docker command line: direct, or through sudo without permission. Without a terminal, sudo remembers the
+    password for the children of this same process and session, so the window (askpass.sh) shows up once."""
+    return (["docker"] if docker_ok() else ["sudo", "-A", "docker"]) + list(args)
+
+
+def new_group():
+    """Child in its own process group (stopped with killpg) but in the panel's session, which sudo needs to
+    reuse the password. Started in the background (app menu, nohup), SIGINT arrives ignored and the children
+    inherit it: they would not stop with SIGINT, and the supervisor would not send PAUSED on closing."""
+    os.setpgid(0, 0)
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
 
 
 class Process(object):
@@ -108,6 +128,7 @@ class Process(object):
         self.name = name
         self.popen = None
         self.lines = collections.deque(maxlen=LOG_LINES)
+        self.recent = collections.deque(maxlen=40)    # last distinct lines, to drop repetitions
         self.partial = ""
         self.started = None
         self.lock = threading.Lock()
@@ -126,14 +147,12 @@ class Process(object):
         if self.running():
             return False
         self.lines.clear()
+        self.recent.clear()
         self.log("$ " + " ".join(cmd))
         env = dict(os.environ, PYTHONUNBUFFERED="1")
-        # Started in the background (app menu, nohup), SIGINT arrives ignored and the children inherit it: they
-        # would not stop with SIGINT, and the supervisor would not send PAUSED on closing. Restore it.
         self.popen = subprocess.Popen(cmd, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                       stdin=subprocess.PIPE if stdin else subprocess.DEVNULL,
-                                      start_new_session=True,
-                                      preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL))
+                                      preexec_fn=new_group)
         self.started = time.time()
         threading.Thread(target=self._read, args=(self.popen,), daemon=True).start()
         return True
@@ -149,7 +168,10 @@ class Process(object):
             self.partial = parts.pop()
             with self.lock:
                 for part in parts:
-                    if part.strip():
+                    # The stack repeats some lines without end (RobotStateMessage, the save thread): keep each
+                    # once, or they push out the one line that says why franka_interface stopped
+                    if part.strip() and part not in self.recent:
+                        self.recent.append(part)
                         self.lines.append(time.strftime("%H:%M:%S ") + part)
         code = popen.wait()
         self.log("[finished, code %s]" % code)
@@ -197,6 +219,7 @@ class Panel(object):
         self.settings = {"simulated": False, "routine": "pcb", "speed": "slow",
                          "modules": {"face": True, "voice": True, "hands": True, "screen": True, "dialogue": True}}
         self.summary, self.t_summary = None, 0.0
+        self.camera, self.t_camera = None, 0.0  # latest image of the PCB camera (JPEG) and when it came
         self.network = {}
         self.docker = {"ok": None, "container": None}
         self.busy = ""              # what the panel is doing right now (start-up, stop...)
@@ -207,6 +230,7 @@ class Panel(object):
         self.virtual_points = None
         threading.Thread(target=self._send_virtual_hands, daemon=True).start()
         threading.Thread(target=self._listen_summary, daemon=True).start()
+        threading.Thread(target=self._listen_camera, daemon=True).start()
         threading.Thread(target=self._watch, daemon=True).start()
 
     # ---------- background ----------
@@ -221,10 +245,34 @@ class Panel(object):
             except ValueError:
                 pass
 
+    def _listen_camera(self):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.bind((IP, CAMERA_PORT))
+        while True:
+            self.camera, self.t_camera = sock.recvfrom(65536)[0], time.time()
+
     def _watch(self):
+        t_sudo, adapter = 0.0, None
         while True:
             self.network = self._check_network()
+            # A USB adapter that resets (e.g. on a hub shared with the webcams) comes back as a new interface, and
+            # franka_interface keeps the dead connection: the next motion fails with "TCP send bytes: Timeout"
+            index = None
+            try:
+                with open("/sys/class/net/%s/ifindex" % self.network["iface"]) as f:
+                    index = f.read().strip()
+            except (OSError, TypeError):
+                pass
+            if index and adapter and index != adapter[1] and adapter[0] == self.network["iface"] \
+                    and self._stack_running():
+                self.event("[error] the network adapter to the robot was reset: the stack lost the robot. Plug the "
+                           "adapter straight into the laptop (not on the webcams' hub), then Stop all and Start system.")
+            if index:
+                adapter = (self.network["iface"], index)
             ok = docker_ok()
+            if not ok and time.time() - t_sudo >= SUDO_KEEP_S:
+                t_sudo = time.time()        # -n: never asks; only keeps an already given password alive
+                subprocess.run(["sudo", "-n", "-v"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             container = None
             if ok:
                 r = subprocess.run(["docker", "inspect", "-f", "{{.State.Running}}", CONTAINER],
@@ -255,6 +303,13 @@ class Panel(object):
     def _stack_running():
         r = subprocess.run(["ps", "-eo", "args"], capture_output=True, text=True)
         return "build/franka_interface" in r.stdout
+
+    @staticmethod
+    def _stack_leftovers():
+        """Any piece of the stack, even without franka_interface (it dies alone when the robot refuses it)."""
+        r = subprocess.run(["ps", "-eo", "args"], capture_output=True, text=True)
+        return any(k in r.stdout for k in ("build/franka_interface", "bin/roscore", "franka_ros_interface.launch",
+                                           "franka_gripper.launch"))
 
     def event(self, text):
         self.events.append(time.strftime("%H:%M:%S ") + text)
@@ -362,6 +417,10 @@ class Panel(object):
                 if self._stack_running():
                     self.event("the stack was already running")
                 else:
+                    if self._stack_leftovers():
+                        self.busy = "closing what was left of the last stack"
+                        self.event(self.busy)
+                        self._container_exec(STACK_STOP)
                     self.busy = "starting the frankapy stack"
                     self.event(self.busy)
                     stack = self.processes["stack"]
@@ -370,17 +429,28 @@ class Panel(object):
                     t0 = time.time()
                     while not any("stack ready" in l for l in stack.tail(50)):
                         if not stack.running() or time.time() - t0 > STACK_TIMEOUT:
-                            self.event("[error] the stack did not start: look at its log")
+                            why = [l.split("[error]", 1)[1].strip() for l in stack.tail(30) if "[error]" in l]
+                            self.event("[error] the stack did not start: " + (" ".join(why[-1:]) or "look at its log"))
                             return
                         time.sleep(0.5)
+                    time.sleep(1.0)
+                    if not self._stack_running():
+                        self.event("[error] the robot refused the connection (franka_interface closed, see the stack "
+                                   "log). In Desk: unlock the joints, activate FCI (blue light). If the log says "
+                                   "Reflex: Clear robot error. Then Start system.")
+                        self._container_exec(STACK_STOP)
+                        return
                     self.event("stack ready")
             self.busy = "starting the controller and the supervisor"
             self.event(self.busy)
             self.start_controller()
-            time.sleep(2.0)
-            if not self.processes["controller"].running():
-                self.event("[error] the controller stopped: look at its log")
-                return
+            ctrl, t0 = self.processes["controller"], time.time()
+            while not any("The robot only moves if" in l for l in ctrl.tail(50)):
+                if not ctrl.running() or time.time() - t0 > CONTROLLER_TIMEOUT:
+                    self.event("[error] the controller could not connect to the robot (see its log). In Desk: "
+                               "blue light and FCI active; if it was in error (Reflex), recover it first.")
+                    return
+                time.sleep(0.5)
             self.start_supervisor()
             time.sleep(1.0)
             self.busy = "starting perception, screen and dialogue"
@@ -404,6 +474,36 @@ class Panel(object):
             self._container_exec("pkill -INT -f '[c]ycle_controller'")
         if not p.wait(5.0):
             p.kill()
+
+    def go_home(self):
+        """Pauses, closes the controller, takes the arm slowly to home (robot/go_home.py) and starts the controller
+        again, which waits PAUSED at the start of the routine. In the simulation, restarting the controller is that."""
+        if self.busy:
+            return "busy: " + self.busy
+        if self.settings["simulated"]:
+            return self.restart_routine()
+        if not self._stack_running():
+            return "start the system first (the stack must be running)"
+
+        def run():
+            self.busy = "going home"
+            self.event(self.busy)
+            try:
+                self.key("p")
+                self.stop_controller()
+                time.sleep(1.0)
+                home = self.processes["home"]
+                home.start(docker("exec", "-i", CONTAINER, "bash", "-c", "%s && cd '%s/robot' && python3 -u go_home.py"
+                                  % (ROS_SETUP, CONTAINER_PATH)))
+                while home.running():
+                    time.sleep(0.5)
+                self.event("at home" if home.exit_code() == 0 else "[error] did not reach home: look at the Go home log")
+                self.start_controller()
+                self.event("the routine waits PAUSED at the start. Press Start routine.")
+            finally:
+                self.busy = ""
+        threading.Thread(target=run, daemon=True).start()
+        return "going home"
 
     def restart_routine(self):
         """Pauses, starts the controller again (it goes back to home first) and the dialogue."""
@@ -442,15 +542,11 @@ class Panel(object):
                     if not self.processes[name].wait(3.0):
                         self.processes[name].kill()
                 ctrl = self.processes["controller"]
-                if self.settings["simulated"] or not (ctrl.running() or self._stack_running()):
+                if self.settings["simulated"] or not (ctrl.running() or self._stack_leftovers()):
                     ctrl.interrupt()
                     ctrl.wait(3.0)
                 else:
-                    self._container_exec("pkill -INT -f '[c]ycle_controller'; pkill -INT -f '[c]ommunication_test'; "
-                                         "sleep 2; pkill -INT -f '[s]tart_stack.sh'; sleep 10; "
-                                         "pkill -INT -f '[f]ranka_gripper.launch'; sleep 2; "
-                                         "pkill -INT -f '[f]ranka_ros_interface.launch'; sleep 2; "
-                                         "pkill -INT -f 'build/[f]ranka_interface'; sleep 2; pkill -INT -x roscore")
+                    self._container_exec(STACK_STOP)
                 for p in self.processes.values():
                     if not p.wait(3.0):
                         p.kill()
@@ -462,6 +558,31 @@ class Panel(object):
                     os._exit(0)
         threading.Thread(target=run, daemon=True).start()
         return "stopping"
+
+    def gripper(self, how):
+        """Opens or closes the Franka Hand (robot/gripper.py), e.g. to put the pen in. Only the fingers move."""
+        if self.settings["simulated"]:
+            return "only with the real robot"
+        if not self._stack_running():
+            return "start the system first (the stack must be running)"
+        if self.processes["gripper"].running():
+            return "the gripper is still moving"
+        self.processes["gripper"].start(docker("exec", "-i", CONTAINER, "bash", "-c",
+                                               "%s && cd '%s/robot' && python3 -u gripper.py %s"
+                                               % (ROS_SETUP, CONTAINER_PATH, how)))
+        return "gripper: " + how
+
+    def recover(self):
+        """libfranka's automaticErrorRecovery (robot/recover_errors.sh): clears Reflex without moving the robot."""
+        if self.settings["simulated"]:
+            return "only with the real robot"
+        if self.busy:
+            return "busy: " + self.busy
+        if self._stack_running():
+            return "stop all first: the error is cleared with the stack closed (FCI takes one program)"
+        self.processes["recover"].start(docker("exec", "-i", CONTAINER, "bash",
+                                               "%s/robot/recover_errors.sh" % CONTAINER_PATH))
+        return "clearing the robot error"
 
     def comm_test(self):
         if self.settings["simulated"]:
@@ -532,9 +653,13 @@ def make_handler(panel, token):
             pass
 
         def _send(self, code, body, kind="application/json"):
-            data = body.encode("utf-8") if isinstance(body, str) else json.dumps(body).encode("utf-8")
+            if isinstance(body, bytes):
+                data = body
+            else:
+                data = body.encode("utf-8") if isinstance(body, str) else json.dumps(body).encode("utf-8")
+                kind += "; charset=utf-8"
             self.send_response(code)
-            self.send_header("Content-Type", kind + "; charset=utf-8")
+            self.send_header("Content-Type", kind)
             self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
@@ -558,6 +683,10 @@ def make_handler(panel, token):
                 return self._send(200, panel.status())
             if url.path == "/api/scene":
                 return self._send(200, scene())
+            if url.path == "/api/camera":         # the PCB camera, about 5 images per second
+                if panel.camera and time.time() - panel.t_camera <= CAMERA_MAX_AGE:
+                    return self._send(200, panel.camera, "image/jpeg")
+                return self._send(204, b"", "image/jpeg")
             if url.path == "/api/live":           # small and frequent: the 3D view polls it at 10 Hz
                 fresh = panel.summary if panel.summary and time.time() - panel.t_summary <= 1.5 else None
                 return self._send(200, {"summary": fresh, "virtual": panel.virtual})
@@ -602,6 +731,8 @@ def make_handler(panel, token):
                     panel.key(body["key"])
             elif action == "restart_routine":
                 result = panel.restart_routine()
+            elif action == "go_home":
+                result = panel.go_home()
             elif action == "module" and body.get("name") in MODULES:
                 name = body["name"]
                 if body.get("on"):
@@ -612,6 +743,10 @@ def make_handler(panel, token):
                 result = panel.set_virtual_hands(body.get("enabled"), body.get("hands"))
             elif action == "comm_test":
                 result = panel.comm_test()
+            elif action == "recover":
+                result = panel.recover()
+            elif action == "gripper" and body.get("how") in ("open", "close"):
+                result = panel.gripper(body["how"])
             elif action == "pcb_plan":
                 result = panel.pcb_plan()
             elif action == "open_desk":
@@ -632,6 +767,7 @@ def main():
     args = p.parse_args()
     PORT = args.port
     signal.signal(signal.SIGINT, signal.default_int_handler)     # Ctrl+C works even when started in the background
+    os.environ["SUDO_ASKPASS"] = os.path.join(PANEL_DIR, "askpass.sh")    # sudo's password window
     token = secrets.token_urlsafe(24)
     panel = Panel()
     try:

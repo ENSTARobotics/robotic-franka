@@ -12,6 +12,8 @@ Talks to the supervisor over UDP: receives its summary on 5014 and sends it comm
     {"command": "start" | "pause" | "resume" | "slow" | "speaking", "until": t}
 While the robot speaks (and 0.5 s after) the microphone is ignored: no words are recognized here
 and the supervisor throws away the voice emotion (it does not hear itself).
+First routine: after the first "yes" (or Start routine) the supervisor calibrates and checks the PCB before
+moving; this says each step and asks for the PCB if it is missing. Later routines start right away.
 Hands next to the PCB (the supervisor marks it in its summary): says that it stops and moves away,
 asks to move them away, and when the zone is clear waits for "continue" (or "yes", "ready") to go on.
 
@@ -84,6 +86,11 @@ PHRASES = {
     "calibrated_no_data": "Calibration failed. I could not see or hear you.",
     "calibrated_cancelled": "Calibration cancelled.",
     "begin?": "Shall we begin?",
+    # First routine: calibration and PCB check before the first move (supervisor.py)
+    "first_checks": "Great. Before the first move I'll calibrate to you and check the PCB.",
+    "checking_pcb": "Now let me check the PCB.",
+    "first_pcb_missing": "I can't see the PCB. Please place it on the table.",
+    "first_no_markers": "I can't see the table markers. Please make sure nothing covers them.",
     # Manual changes from the supervisor's keyboard
     "manual_normal": "Okay, normal speed.",
     "manual_slow": "Okay, going slower.",
@@ -287,6 +294,8 @@ def main():
     t_voice_order = 0.0               # the summary takes a while to reflect a voice order just sent
     pcb, t_pcb, t_connected = None, 0.0, None   # pcb = True / False / None (unknown)
     calibrating = False               # during calibration the operator talks: they are not listened to
+    preparing = None                  # the supervisor's first-routine checks: None, "calibrating" or "pcb"
+    told_pcb = None                   # what it already said about the PCB during those checks
     last_stage = None                 # last stage of the task announced
     try:
         while True:
@@ -310,13 +319,27 @@ def main():
                 pcb = None
             if connected and (summary.get("cause") == "calibrating") != calibrating:
                 calibrating = not calibrating
-                if calibrating:
-                    voice.say("calibrate", urgent=True)
+                if calibrating:            # not urgent when it follows "first_checks": it would cut it off
+                    voice.say("calibrate", urgent=not (summary.get("first") or {}).get("preparing"))
                 else:
                     result = summary.get("calibration", "ok")
                     voice.say("calibrated_" + result, urgent=result == "cancelled")
-                    if phase == "waiting_start":
+                    if phase == "waiting_start" and not (summary.get("first") or {}).get("preparing"):
                         voice.say("begin?")
+            # First routine (supervisor.py): it says each step, and "starting" when the robot is about to move
+            first = (summary.get("first") or {}) if connected else {}
+            if connected and first.get("preparing") != preparing:
+                if first.get("preparing") == "pcb":
+                    voice.say("checking_pcb")
+                    told_pcb = None
+                elif preparing and first.get("prepared"):
+                    voice.say("starting")
+                    phase = "working"
+                preparing = first.get("preparing")
+            if preparing == "pcb" and first.get("pcb") in (False, None) and first.get("pcb") != told_pcb \
+                    and not voice.busy():
+                voice.say("first_pcb_missing" if first.get("pcb") is False else "first_no_markers")
+                told_pcb = first.get("pcb")
 
             # Words heard (or typed)
             heard = []
@@ -352,9 +375,11 @@ def main():
                 elif intent == "yes" and (phase == "waiting_pcb" or (phase == "waiting_start" and pcb is False)):
                     voice.say("pcb_reminder")
                     phase = "waiting_pcb"
+                elif intent == "yes" and phase == "waiting_start" and preparing:
+                    pass                                # it is already getting ready to start
                 elif intent == "yes" and phase == "waiting_start":
                     command("start")
-                    voice.say("starting")
+                    voice.say("starting" if (summary.get("first") or {}).get("prepared", True) else "first_checks")
                     phase = "working"
                 elif intent == "no" and phase == "waiting_start":
                     voice.say("not_yet")
@@ -384,7 +409,8 @@ def main():
                 voice.say("pcb_ok" if pcb else "welcome")
                 phase = "waiting_start"
             # A hand over the PCB also hides it. It only warns before starting: while working, the arm covers it
-            elif connected and phase == "waiting_start" and pcb is False and not calibrating and not voice.busy():
+            elif connected and phase == "waiting_start" and pcb is False and not calibrating and not preparing \
+                    and not voice.busy():
                 voice.say("pcb_lost")
                 phase = "waiting_pcb"
             # Hands next to the PCB: the supervisor already moved the robot away; here it explains and waits for "continue"
@@ -427,7 +453,7 @@ def main():
                     if notice:
                         pending = (notice, current)
                 elif summary.get("mode") == "MANUAL" and previous is not None and current != previous \
-                        and t_tick - t_voice_order > 1.0 and "calibrating" not in (current[1], previous[1]) \
+                        and t_tick - t_voice_order > 1.0 and not {"calibrating", "checking_pcb"} & {current[1], previous[1]} \
                         and current[1] != "after_hands":
                     notice = {"NORMAL": "manual_normal", "CAUTIOUS": "manual_slow", "PAUSED": "manual_pause",
                               "RETRACT": "manual_retract"}.get(current[0])

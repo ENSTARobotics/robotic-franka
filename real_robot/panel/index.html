@@ -60,6 +60,8 @@
   body.real .sim-only, body.sim .real-only { display: none !important; }
   #view { width: 100%; height: 440px; display: block; background: #121317; border-radius: 8px; cursor: grab; touch-action: none; }
   #view.dragging { cursor: grabbing; }
+  #cam { width: 100%; display: none; border-radius: 8px; background: #121317; }
+  #cam-none { padding: 40px 0; text-align: center; background: #121317; border-radius: 8px; }
 </style>
 </head>
 <body>
@@ -107,7 +109,14 @@
         Someone holds the emergency stop.</p>
       <div class="row">
         <button class="real-only" onclick="commTest()">Communication test</button>
+        <button class="real-only" onclick="post({action:'recover'}); showLog('recover')"
+          title="For a Reflex error: clears it through FCI without moving the robot (with the system stopped)">Clear robot error</button>
         <button onclick="post({action:'pcb_plan'}); showLog('pcb_plan')">Check PCB plan</button>
+      </div>
+      <div class="row real-only" style="margin-top:8px">
+        <span class="muted">Gripper (pen):</span>
+        <button onclick="post({action:'gripper', how:'open'}); showLog('gripper')">Open</button>
+        <button onclick="if (confirm('The fingers close with 20 N. Hold the pen between them, your own fingers out of the way.')) { post({action:'gripper', how:'close'}); showLog('gripper'); }">Close</button>
       </div>
     </section>
   </div>
@@ -129,7 +138,7 @@
       <h2>3 · Routine</h2>
       <div id="state"><div class="title" id="s-title">NOT CONNECTED</div><div class="reason" id="s-reason">Start the system</div></div>
       <div id="done-row" class="row" style="margin-top:12px; display:none">
-        <span style="flex:1; font-size:16px">✅ Routine finished.</span>
+        <span style="flex:1; font-size:16px" id="done-text">✅ Routine finished.</span>
         <button class="big go" style="flex:0 0 auto" onclick="post({action:'restart_routine'})">↻ Run again</button>
       </div>
       <div class="row" style="margin-top:12px">
@@ -143,6 +152,7 @@
         <button onclick="key('r')">Move away<span class="key">R</span></button>
         <button onclick="key('k')">Calibrate operator<span class="key">K</span></button>
         <button onclick="restartRoutine()">Restart routine</button>
+        <button onclick="goHome()">Go home</button>
       </div>
       <div style="margin-top:14px" class="kv">
         <span class="k">Robot</span><span id="r-text">–</span>
@@ -153,6 +163,14 @@
         <span class="k">Mode</span><span id="m-text">–</span>
       </div>
       <div id="hands" style="margin-top:12px">Hands: –</div>
+    </section>
+    <section>
+      <h2>PCB camera</h2>
+      <img id="cam" alt="PCB camera">
+      <div id="cam-none" class="muted">No image: the Hands + PCB program is not running.</div>
+      <div class="muted" style="margin-top:6px">Green circles: the zone around each soldering point; red: a hand
+        covers it and the robot stops. Holding the PCB by its edges is fine. Orange: the PCB area seen through the
+        markers; yellow boxes: the hands detected.</div>
     </section>
     <section>
       <h2>Robot view (3D)</h2>
@@ -238,6 +256,11 @@ function resume() {
   const perception = status && (status.processes.face.running || status.processes.voice.running);
   key(perception ? runKey : (runKey === "c" ? "c" : "n"));
 }
+function goHome() {
+  if (confirm("The robot pauses and goes slowly to the home position, then waits there. Emergency stop in hand?")) {
+    post({action: "go_home"}); showLog("home");
+  }
+}
 function restartRoutine() {
   if (confirm("Restart the routine? The robot pauses, goes back to the start and waits for Start routine.")) post({action: "restart_routine"});
 }
@@ -293,6 +316,10 @@ function render(s) {
   document.getElementById("b-fullsim").disabled = !!s.busy;
   const rob = s.summary && s.summary.robot;
   document.getElementById("done-row").style.display = rob && rob.done ? "flex" : "none";
+  // An error also ends the controller: say so, and that the stack may need Stop all + Start system
+  document.getElementById("done-text").textContent = rob && rob.error ?
+    "❌ Stopped by an error: " + rob.error + (/FrankaArm|Comm|TCP|Timeout/.test(rob.error) ?
+      " — the connection to the robot dropped: Stop all, then Start system." : "") : "✅ Routine finished.";
   const seg = (id, v) => document.querySelectorAll("#" + id + " button").forEach(b => b.classList.toggle("on", b.dataset.v === String(v)));
   seg("seg-sim", s.settings.simulated); seg("seg-routine", s.settings.routine); seg("seg-speed", s.settings.speed);
   document.querySelectorAll("input[data-m]").forEach(c => c.checked = !!s.settings.modules[c.dataset.m]);
@@ -310,7 +337,7 @@ function render(s) {
               `${n.iface}: ${n.speed || "?"} Mb/s, ping ${n.ping_ms.toFixed(2)} ms` + (n.speed !== 1000 ? " (must be 1000)" : ""), "t-net");
   const d = s.docker || {};
   if (s.settings.simulated) setDot("c-docker", "", "docker: not needed (simulated)", "t-docker");
-  else if (d.ok === false) setDot("c-docker", "wait", "docker asks for your password (see SETUP: docker group)", "t-docker");
+  else if (d.ok === false) setDot("c-docker", "wait", "docker: your password is asked once, in a window", "t-docker");
   else setDot("c-docker", d.container === true ? "ok" : "wait", d.container === "missing" ? "franka_container does not exist (SETUP step 3)" :
               d.container ? "franka_container running" : "franka_container stopped", "t-docker");
   setDot("c-stack", d.stack ? "ok" : "", d.stack ? "frankapy stack running" : "frankapy stack not running", "t-stack");
@@ -331,7 +358,7 @@ function render(s) {
     document.getElementById("s-reason").textContent = (sum.cause === "calibrating" ? "calibrating: look at the camera and talk normally" : sum.reason || "") +
       (sum.event ? "  ·  robot: " + sum.event : "");
     const r = sum.robot || {};
-    document.getElementById("r-text").textContent = !r.connected ? "controller not connected" : r.done ? "routine finished" :
+    document.getElementById("r-text").textContent = !r.connected ? "controller not connected" : r.done ? (r.error ? "stopped by an error" : "routine finished") :
       `${r.segment || "–"} (${(r.seg_index || 0) + 1}/${r.n_segments || 0}) ${r.action || "still"}`;
     document.getElementById("r-bar").style.width = r.n_segments ? (100 * (r.done ? 1 : r.seg_index / r.n_segments)) + "%" : "0";
     document.getElementById("t-bar").style.width = sum.T == null ? "0" : (100 * sum.T) + "%";
@@ -349,7 +376,7 @@ function render(s) {
 
   // Programs
   const list = document.getElementById("procs");
-  const names = ["stack", "controller", "supervisor", ...MODULES, "comm_test", "pcb_plan"];
+  const names = ["stack", "controller", "supervisor", ...MODULES, "comm_test", "recover", "gripper", "home", "pcb_plan"];
   list.innerHTML = "";
   for (const name of names) {
     const p = s.processes[name];
@@ -560,6 +587,19 @@ document.getElementById("vh").onchange = e => {
   post({action: "virtual_hands", enabled: e.target.checked, hands: hands || REST});
 };
 
+// PCB camera (hands.py): fetched with the token, so it cannot be a plain <img src>
+let camUrl = null;
+async function refreshCamera() {
+  try {
+    const r = await fetch("/api/camera", {headers: {"X-Token": TOKEN}});
+    const img = document.getElementById("cam"), none = document.getElementById("cam-none");
+    if (r.status !== 200) { img.style.display = "none"; none.style.display = ""; return; }
+    const url = URL.createObjectURL(await r.blob());
+    img.onload = () => { if (camUrl && camUrl !== url) URL.revokeObjectURL(camUrl); camUrl = url; };
+    img.src = url; img.style.display = "block"; none.style.display = "none";
+  } catch (e) {}
+}
+setInterval(refreshCamera, 200);
 setInterval(refresh, 600);
 setInterval(refreshLog, 1000);
 refresh(); refreshLog();

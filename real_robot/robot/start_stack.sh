@@ -3,7 +3,7 @@
 # Does not move the robot. Ctrl+C shuts it down in reverse order (gripper, ros_interface, franka_interface, roscore).
 # Each line gets its label and is cut short: the RobotStateMessage error fills whole screens.
 ROBOT_IP=147.250.35.11
-set -m                                  # each process in its own group: Ctrl+C only reaches this script
+set -m -o pipefail                      # each process in its own group: Ctrl+C only reaches this script
 source /root/frankapy/catkin_ws/devel/setup.bash
 
 groups=()
@@ -30,6 +30,20 @@ shut_down() {
 }
 trap shut_down INT TERM
 
+# franka_interface sets the impedances before its own error handling: if the robot is still in Reflex (e.g. after
+# a communication_constraints_violation), it dies right away. Clear the error first; it does not move the robot.
+echo "=== clearing robot errors ==="
+out=$(bash "$(dirname "$(realpath "$0")")/recover_errors.sh" 2>&1); ok=$?
+echo "$out" | sed "s/^/[recover] /"
+if [ $ok != 0 ]; then
+    if echo "$out" | grep -q "manual error recovery"; then
+        # e.g. a collision (joint_reflex, cartesian_reflex): only Desk or the stop button can clear it
+        echo "[error] the robot needs a manual error recovery: in Desk, acknowledge the error (or press and release the stop button), unlock the joints if asked (blue light), then Start system again"
+    else
+        echo "[error] cannot talk to the robot through FCI: in Desk, unlock the joints and activate FCI (blue light)"
+    fi
+    exit 1
+fi
 start roscore 5 roscore
 start franka 4 ~/franka-interface/build/franka_interface --robot_ip "$ROBOT_IP"
 start ros_if 5 roslaunch franka_ros_interface franka_ros_interface.launch robot_ip:="$ROBOT_IP"

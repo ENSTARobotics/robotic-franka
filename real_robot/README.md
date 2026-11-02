@@ -175,6 +175,12 @@ answering *yes*) enables automatic mode; `n`, `c`, `p`, `r` take manual control 
 For 20 s, with the robot paused and voice orders ignored, it measures each sensor's normal stress level for this
 person; afterwards only stress above that level counts. Repeat it for each person: it is not saved between sessions.
 
+**First routine.** The first start after the supervisor opens (*Start routine*, `a`, or *yes* by voice) does not move
+at once: it calibrates (unless `k` was already done), then checks that the PCB is on the table (hands.py, through the
+table markers), and only then goes automatic; the robot says each step and asks for the PCB if it is missing. Later
+routines (*Restart routine*, *Run again*) start right away. Without hands.py (or in the simulation, without markers)
+there is no PCB check and it starts after 3 s. `n`/`c` still take manual control without these checks.
+
 **How `T(t)` is computed.** Each sensor sends `{"source": "face"|"audio", "stress": 0..1, "confidence": 0..1}`.
 
 - Stress weights, the same for face and voice: fear, anger, disgust 1; sadness 0.6; surprise 0.5;
@@ -252,9 +258,12 @@ routine it does not check, because the arm itself covers the PCB.
 
 The table camera (the C930e, which also sees the ArUco markers) runs a YOLOv8n hand detector
 (`perception/models/hands_yolov8n.pt`, from the team's YOLO_hands; see `HANDS_YOLO.txt`). The operator holds the
-PCB, so hands on its edges are fine: the watched zone is a circle of 3 cm (`--point-radius-cm`) around each
-soldering point, placed in the image through the markers. A hand counts when its box touches one of those circles. It is "near" with hands in 2 of the last 3 images (10 Hz) and clears after
-1 s without them.
+PCB, so hands on its edges are fine: the watched zone is a circle of 2 cm (`--point-radius-cm`) around each
+soldering point, placed in the image through the markers. A hand counts when its box covers at least 30% of one of
+those circles (`--min-cover`): a hand box is much bigger than the fingers, so a hand holding the edge may graze a
+circle without stopping the robot. It is "near" with hands in 2 of the last 3 images (10 Hz) and clears after
+1 s without them. The control panel shows this camera with the circles (red where a hand counts), the hand boxes and
+the PCB area.
 
 ```bash
 .venv/bin/python perception/hands.py --show     # zone in green (red with hands), detected hands in orange

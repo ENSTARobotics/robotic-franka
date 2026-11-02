@@ -3,17 +3,20 @@
 
     python3 hands.py                # tells the supervisor over UDP 5016 and dialogue.py (PCB) over 5015
     python3 hands.py --show         # the same, with a window: watched zone and detected hands
-    python3 hands.py --point-radius-cm 4   # stop at 4 cm from a soldering point instead of 3
+    python3 hands.py --point-radius-cm 3   # watch 3 cm around each soldering point instead of 2
     python3 hands.py --frames-from-face --no-markers   # simulation: laptop camera via face.py, whole image
 
 Uses the same camera as pcb.py (the one that sees the 4 ArUco markers), and a camera can only be
 opened by one program: that is why this one also does the PCB check and sends the same as pcb.py.
 The operator holds the PCB, so hands on its edges are fine: the watched zone is a circle of
 --point-radius-cm around each soldering point (the same 2x3 grid as pcb_plan.py), placed in the image
-through the markers. A hand counts if its box touches one of those circles.
+through the markers. A hand counts if its box covers at least --min-cover of one of those circles: a
+hand box is much bigger than the fingers, so a hand holding the edge may graze a circle without counting.
+It also sends the annotated image (zone, hands, PCB) to the control panel over UDP 5020, a few per second.
 
-Sends {"t": .., "near": true|false|null, "hands": n, "confidence": 0..1}; null = it does not see the
-markers and does not know where the PCB is. "near" turns on with 2 of the last 3 images and turns off
+Sends {"t": .., "near": true|false|null, "hands": n, "confidence": 0..1, "pcb": true|false|null}; null =
+it does not see the markers and does not know where the PCB is. "pcb" (is the PCB on the table) is only
+there when it checks the PCB; the supervisor uses it to check the PCB before the first routine. "near" turns on with 2 of the last 3 images and turns off
 after 1 s without hands in the zone: warn fast, release slowly.
 
 Simulation without the table (--no-markers): any hand in the whole image counts as near, and there is no
@@ -47,10 +50,14 @@ MODEL = os.path.join(DIR, "models", "hands_yolov8n.pt")
 HANDS_PORT = 5016
 FRAMES_PORT = 5019          # images from face.py --share-frames
 FRAMES_TIMEOUT = 1.0        # s without images from face.py -> "near" unknown
+PREVIEW_PORT = 5020         # annotated image for the control panel (panel/panel.py)
+PREVIEW_HZ = 5.0
+PREVIEW_WIDTH = 480         # px; a JPEG of this size fits in one UDP datagram
 CAMERA = "C930e"            # the one that sees the table and the 4 markers, like pcb.py
 HZ = 10.0
 PCB_HZ = 2.0
-POINT_RADIUS_CM = 3.0       # around each soldering point (the PCB edges stay free to hold it)
+POINT_RADIUS_CM = 2.0       # around each soldering point (the PCB edges stay free to hold it)
+MIN_COVER = 0.3             # part of a point's circle a hand box must cover to count
 MIN_CONF = 0.4              # minimum YOLO confidence
 IMGSZ = 640
 WINDOW = 3                  # "near" if there are hands in the zone in ...
@@ -67,12 +74,27 @@ def watched_circles(radius, sides=16):
             for p in pcb_plan.grid_points(E, 2, 3, pcb_plan.MARGIN)]
 
 
-def touches_zone(box, zone_img):
-    """True if the box (x1, y1, x2, y2) in pixels overlaps the zone's polygon."""
+def covers_zone(box, zone_img, min_cover):
+    """True if the box (x1, y1, x2, y2) in pixels covers more than min_cover of the zone's polygon (0: any overlap)."""
     x1, y1, x2, y2 = box
     rect = np.array([[x1, y1], [x2, y1], [x2, y2], [x1, y2]], np.float32)
     area, _ = cv2.intersectConvexConvex(rect, zone_img)
-    return area > 0.0
+    return area > 0.0 and area >= min_cover * cv2.contourArea(zone_img)
+
+
+def draw(bgr, zones_img, boxes, hit, near, pcb_outline, text):
+    """The image with the watched circles (red where a hand counts), the hand boxes and the PCB area."""
+    if pcb_outline is not None:
+        cv2.polylines(bgr, [pcb_outline.astype(np.int32)], True, (255, 160, 0), 2)
+    for i, z in enumerate(zones_img or []):
+        cv2.polylines(bgr, [z.astype(np.int32)], True, (0, 0, 255) if i in hit else (0, 200, 0), 2)
+    for (x1, y1, x2, y2), conf in boxes:
+        cv2.rectangle(bgr, (int(x1), int(y1)), (int(x2), int(y2)), (0, 200, 255), 2)
+        cv2.putText(bgr, "hand %.2f" % conf, (int(x1), int(y1) - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
+                    (0, 200, 255), 2)
+    cv2.rectangle(bgr, (0, 0), (bgr.shape[1], 34), (0, 0, 255) if near else (40, 40, 40), -1)
+    cv2.putText(bgr, text, (8, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+    return bgr
 
 
 class Watch(object):
@@ -129,6 +151,8 @@ def main():
     p.add_argument("--camera", default=CAMERA, help="name or number of the webcam (default %s)" % CAMERA)
     p.add_argument("--point-radius-cm", type=float, default=POINT_RADIUS_CM,
                    help="cm watched around each soldering point (default %.0f)" % POINT_RADIUS_CM)
+    p.add_argument("--min-cover", type=float, default=MIN_COVER,
+                   help="part of a point's circle a hand must cover to count (default %.1f)" % MIN_COVER)
     p.add_argument("--conf", type=float, default=MIN_CONF, help="minimum YOLO confidence (0..1)")
     p.add_argument("--imgsz", type=int, default=IMGSZ, help="YOLO input size")
     p.add_argument("--hz", type=float, default=HZ)
@@ -159,7 +183,7 @@ def main():
              "%.0f cm around each soldering point" % args.point_radius_cm,
              IP, HANDS_PORT, "" if pcb is None else ", PCB to %d" % PCB_PORT,
              "face.py (UDP %d)" % FRAMES_PORT if args.frames_from_face else "camera " + args.camera))
-    t_pcb = 0.0
+    t_pcb, t_preview = 0.0, 0.0
     try:
         while True:
             t_tick = time.time()
@@ -180,42 +204,56 @@ def main():
 
             result = model(bgr, imgsz=args.imgsz, conf=args.conf, device=device, verbose=False)[0]
             boxes = [(c.xyxy[0].tolist(), float(c.conf[0])) for c in result.boxes]
-            zones_img, in_zone = None, []
+            zones_img, in_zone, hit, min_cover = None, [], set(), args.min_cover
             if zone is None:
                 h, w = bgr.shape[:2]
-                zones_img = [np.array([[0, 0], [w, 0], [w, h], [0, h]], np.float32)]
+                zones_img, min_cover = [np.array([[0, 0], [w, 0], [w, h], [0, h]], np.float32)], 0.0
             elif zone.homography is not None:
                 zones_img = [cv2.perspectiveTransform(c[None], zone.homography)[0] for c in circles]
             if zones_img is not None:
-                in_zone = [conf for box, conf in boxes if any(touches_zone(box, z) for z in zones_img)]
+                for box, conf in boxes:
+                    covered = [i for i, z in enumerate(zones_img) if covers_zone(box, z, min_cover)]
+                    if covered:
+                        in_zone.append(conf)
+                        hit.update(covered)
                 near = watch.update(bool(in_zone), t_tick)
             else:
                 near = None
-            sock.sendto(json.dumps({"t": time.time(), "near": near, "hands": len(in_zone),
-                                    "confidence": round(max(in_zone), 3) if in_zone else 0.0}).encode("utf-8"),
-                        (IP, HANDS_PORT))
+            message = {"t": time.time(), "near": near, "hands": len(in_zone),
+                       "confidence": round(max(in_zone), 3) if in_zone else 0.0}
+            if pcb is not None:
+                message["pcb"] = pcb.present
+            sock.sendto(json.dumps(message).encode("utf-8"), (IP, HANDS_PORT))
 
             if pcb is not None and t_tick - t_pcb >= 1.0 / PCB_HZ:
                 t_pcb = t_tick
                 pcb.update(bgr, t_tick)
                 sock.sendto(json.dumps(pcb.message()).encode("utf-8"), (IP, PCB_PORT))
 
-            sys.stdout.write("\r\033[K%s  hands seen %d, in the zone %d%s%s"
-                             % ({True: "HANDS NEAR", False: "zone clear", None: "markers not seen"}[near],
-                                len(boxes), len(in_zone), "" if zone is None else "  markers %d/4" % seen,
-                                "" if pcb is None else "  | " + pcb.text()))
+            status = "%s  hands seen %d, in the zone %d%s%s" % (
+                {True: "HANDS NEAR", False: "zone clear", None: "markers not seen"}[near],
+                len(boxes), len(in_zone), "" if zone is None else "  markers %d/4" % seen,
+                "" if pcb is None else "  | " + pcb.text())
+            sys.stdout.write("\r\033[K" + status)
             sys.stdout.flush()
-            if args.show:
-                if zones_img is not None:
-                    cv2.polylines(bgr, [z.astype(np.int32) for z in zones_img], True,
-                                  (0, 0, 255) if near else (0, 200, 0), 2)
-                for (x1, y1, x2, y2), conf in boxes:
-                    cv2.rectangle(bgr, (int(x1), int(y1)), (int(x2), int(y2)), (0, 200, 255), 2)
-                    cv2.putText(bgr, "%.2f" % conf, (int(x1), int(y1) - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
-                                (0, 200, 255), 2)
-                cv2.imshow("hands (q to quit)", bgr)
-                if (cv2.waitKey(1) & 0xFF) == ord("q"):
-                    break
+            preview = t_tick - t_preview >= 1.0 / PREVIEW_HZ
+            if args.show or preview:
+                outline = None if zone is None or zone.homography is None else zone.image_corners()
+                view = draw(bgr.copy(), zones_img, boxes, hit, near, outline,
+                            {True: "HANDS NEAR", False: "zone clear", None: "markers not seen"}[near]
+                            + ("" if pcb is None else "  |  " + {True: "PCB present", False: "no PCB",
+                                                                None: "PCB unknown"}[pcb.present]))
+                if preview:
+                    t_preview = t_tick
+                    h, w = view.shape[:2]
+                    small = cv2.resize(view, (PREVIEW_WIDTH, int(h * PREVIEW_WIDTH / w)))
+                    ok, jpg = cv2.imencode(".jpg", small, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                    if ok and len(jpg) < 60000:
+                        sock.sendto(jpg.tobytes(), (IP, PREVIEW_PORT))
+                if args.show:
+                    cv2.imshow("hands (q to quit)", view)
+                    if (cv2.waitKey(1) & 0xFF) == ord("q"):
+                        break
             time.sleep(max(0.0, 1.0 / args.hz - (time.time() - t_tick)))
     except KeyboardInterrupt:
         pass

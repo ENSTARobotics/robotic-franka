@@ -12,6 +12,10 @@ Hands (perception/hands.py, UDP 5016): if there are hands next to the PCB when t
 to move, RETRACT (stops and goes up 5 cm) and it stays like that, in any mode, until the zone is
 clear AND the operator says "continue" (or presses a, n or c). Then it goes on slowly (CAUTIOUS) for
 HANDS_SLOW_S s before it can return to normal speed. Without hands.py open nothing is watched.
+First routine: the first start (a, or "yes" by voice) calibrates the operator and checks that the PCB is on
+the table (hands.py sends what it sees) before going AUTOMATIC. Later routines, while this supervisor runs,
+start right away. Without face and voice it does not calibrate; without the PCB check (no hands.py, or the
+simulation without markers) it starts after PCB_WAIT_S s.
 Keys (in its terminal, or {"key": "a"} over UDP 5017 from panel/panel.py):
        k = calibrate the operator's baseline (robot paused; voice orders are ignored)
        a = AUTOMATIC (T(t) decides the state)
@@ -48,6 +52,8 @@ HANDS_SLOW_S = 10.0         # s at CAUTIOUS after a hands stop, before normal sp
 PANEL_HZ = 10.0
 ECHO_MARGIN = 0.5           # s after the robot speaks in which the voice emotion is ignored
 CALIBRATION_S = 20.0        # s the calibration with the k key lasts
+PCB_WAIT_S = 3.0            # s without PCB information (no hands.py) before the first routine starts without it
+PCB_MAX_AGE = 1.0           # s: an older PCB reading does not count
 VOICE_SLOW_S = 20.0         # s a "slow down" / "continue" by voice lasts before it can go up
 HZ = 20.0
 SCREEN_HZ = 5.0             # redraws per second at most (UDP sending keeps HZ)
@@ -120,6 +126,9 @@ def main():
     hands, t_hands = {}, None
     hands_lock = False          # hands next to the PCB: RETRACT until the zone is clear + "continue"
     slow_until = 0.0            # after a hands stop: at most CAUTIOUS until this time
+    prepared = False            # first routine's calibration and PCB check done: later starts go straight on
+    preparing, t_pcb_check = None, 0.0  # None | "calibrating" | "pcb": the first start does these before AUTO
+    pcb, t_pcb = None, None     # PCB on the table, from hands.py: True / False / None (markers not seen)
 
     trust, fsm = Trust(), StateMachine()
     mode, manual = "MANUAL", "PAUSED"
@@ -152,6 +161,8 @@ def main():
             # Hands next to the PCB (hands.py). Without recent messages it is unknown: it does not count as near
             for m in read_all(sock_hands):
                 hands, t_hands = m, t_tick
+                if "pcb" in m:                  # only when hands.py checks the PCB (not in the simulation)
+                    pcb, t_pcb = m["pcb"], t_tick
             watching = t_hands is not None and t_tick - t_hands <= HANDS_MAX_AGE and hands.get("near") is not None
             hands_near = watching and hands.get("near") is True
 
@@ -165,6 +176,23 @@ def main():
                 line("[hands] zone clear and %s: resuming slowly for %.0f s" % (origin, HANDS_SLOW_S))
                 return True
 
+            def request_start(origin):
+                """Start (a, or "yes" by voice): straight to AUTO, or first the first routine's checks."""
+                nonlocal mode, manual, preparing, t_pcb_check, t_calibration_end, calibration
+                if prepared:
+                    mode = "AUTO"
+                    return
+                mode, manual = "MANUAL", "PAUSED"
+                if calibration in ("ok", "no_face", "no_audio") or not trust.last:
+                    preparing, t_pcb_check = "pcb", t_tick  # calibrated by hand already, or no face nor voice
+                    line("[first routine] %s: checking the PCB before starting" % origin)
+                else:
+                    preparing, calibration = "calibrating", ""
+                    t_calibration_end = t_tick + CALIBRATION_S
+                    trust.start_calibration()
+                    line("[first routine] %s: calibrating %.0f s, then checking the PCB, before starting"
+                         % (origin, CALIBRATION_S))
+
             # Keyboard and control panel
             keys = []
             if keyboard and select.select([fd], [], [], 0)[0]:
@@ -175,6 +203,11 @@ def main():
                 if key == "q":
                     quit_now = True
                     break
+                if preparing and key == "a":
+                    continue                    # it is already getting ready to start
+                if preparing and (key == "k" or key in KEYS):
+                    preparing = None
+                    line("[first routine] checks cancelled by key %s" % key)
                 if t_calibration_end is not None and (key in ("a", "k") or key in KEYS):
                     t_calibration_end, calibration = None, "cancelled"
                     trust.cancel_calibration()
@@ -184,6 +217,8 @@ def main():
                     t_calibration_end = t_tick + CALIBRATION_S
                     trust.start_calibration()
                     line("[key k] calibrating %.0f s: look at the camera and talk normally" % CALIBRATION_S)
+                elif key == "a" and not prepared:
+                    request_start("key a")
                 elif key == "a":
                     mode = "AUTO"
                     line("[key a] AUTOMATIC mode: T(t) decides the state")
@@ -207,9 +242,17 @@ def main():
                     continue                    # we asked them to talk: a misheard "yes" must not start the robot
                 if hands_lock and order in ("start", "resume") and not release_hands("voice " + order):
                     continue
+                if order in ("start", "resume") and preparing:
+                    continue
+                if order in ("start", "resume") and not prepared:   # it never moved yet: resuming is starting
+                    request_start("voice " + order)
+                    continue
                 if order == "start":
                     mode = "AUTO"
                 elif order == "pause":
+                    if preparing:
+                        preparing = None
+                        line("[first routine] checks cancelled by voice")
                     mode, manual = "MANUAL", "PAUSED"
                 elif order == "resume":
                     mode = "AUTO"
@@ -232,6 +275,16 @@ def main():
                 line("[calibration] baseline: " + ", ".join(
                     "%s %s" % (f, "%.2f" % baseline[f] if f in baseline else "no data, stays uncalibrated")
                     for f in SOURCES))
+                if preparing == "calibrating":
+                    preparing, t_pcb_check = "pcb", t_tick
+
+            # First routine: the PCB must be on the table. Without anyone checking it, it starts after a while
+            pcb_known = t_pcb is not None and t_tick - t_pcb <= PCB_MAX_AGE
+            if preparing == "pcb" and ((pcb_known and pcb is True) or
+                                       (not pcb_known and t_tick - t_pcb_check >= PCB_WAIT_S)):
+                preparing, prepared, mode = None, True, "AUTO"
+                line("[first routine] %s: AUTOMATIC mode" % ("PCB on the table" if pcb_known else
+                                                             "nobody checks the PCB (hands.py), starting anyway"))
 
             # Perception -> T(t) -> state machine (always runs, also in manual)
             for m in read_all(sock_perc):
@@ -256,12 +309,16 @@ def main():
             if hands_lock:
                 state = "RETRACT"
             cause = ("calibrating" if t_calibration_end is not None else
+                     "checking_pcb" if preparing == "pcb" else
                      ("hands" if hands_near else "hands_clear") if hands_lock else
                      "after_hands" if slowed else fsm.cause if mode == "AUTO" else "manual")
             cmd = {"t": time.time(), "enabled": state != "PAUSED", "speed_scale": speed[state],
                    "retract": state == "RETRACT", "state": "PAUSED" if state == "RETRACT" else state,
                    "trust": None if T is None else round(T, 3),
-                   "reason": "hands next to the PCB" if hands_lock else
+                   "reason": ("first routine: checking the PCB" if not pcb_known or pcb else
+                              "first routine: place the PCB on the table" if pcb is False else
+                              "first routine: the table markers are not seen") if preparing == "pcb" else
+                             "hands next to the PCB" if hands_lock else
                              "slowly for a moment after the hands stop" if slowed else
                              fsm.reason if mode == "AUTO" else "manual"}
             sock_cmd.sendto(json.dumps(cmd).encode("utf-8"), (IP, CMD_PORT))
@@ -285,12 +342,14 @@ def main():
                                   "age": round(t_tick - t_f, 2)}
                 panel = {"t": t_tick, "mode": mode, "state": state, "cause": cause, "reason": cmd["reason"],
                          "calibration": calibration, "T": cmd["trust"], "sources": sources,
+                         "first": {"prepared": prepared, "preparing": preparing,
+                                   "pcb": pcb if pcb_known else "unknown"},
                          "hands": {"watching": watching, "near": hands_near, "lock": hands_lock},
                          "event": last_event or "",
                          "robot": {"connected": age is not None and age <= ROBOT_TIMEOUT,
                                    "segment": robot.get("segment", ""), "action": robot.get("action", ""),
                                    "seg_index": robot.get("seg_index", 0), "n_segments": robot.get("n_segments", 0),
-                                   "done": robot.get("done", False),
+                                   "done": robot.get("done", False), "error": robot.get("error", ""),
                                    "q": robot.get("q") or [], "state": robot.get("state", "")}}
                 for port in (PANEL_PORT, DIALOGUE_PORT, GUI_PORT):
                     sock_cmd.sendto(json.dumps(panel).encode("utf-8"), (IP, port))

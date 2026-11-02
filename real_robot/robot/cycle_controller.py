@@ -46,6 +46,9 @@ ARRIVAL_TOL = 0.02          # rad, largest error accepted when a segment ends
 RETRACT_M = 0.05            # m the tool goes up when retracting
 RETRACT_DUR = 2.5           # s, fixed and slow speed (peak ~3.8 cm/s); --retract-dur
 RETRACT_DUR_MIN = 2.0       # s, the retraction is never faster than this
+# s after a stop_skill() before the next motion: starting one while the arm still brakes makes the robot reject it
+# (joint_motion_generator_acceleration_discontinuity, Reflex), and franka_interface may not survive it
+STOP_SETTLE_S = 0.8
 
 SEQUENCE = ["approach", "solder", "retreat"]
 STATES = ("NORMAL", "CAUTIOUS", "PAUSED")
@@ -239,6 +242,7 @@ def main():
     action = None            # None, "segment", "retract" or "soldering" (waiting at a point)
     t_wait_end = 0.0
     retracted = False        # the retraction for this stop was already done
+    t_stopped = 0.0          # last stop_skill(): no new motion until STOP_SETTLE_S later
     warned_cap = False       # already warned that the supervisor asks for more than --max-scale
     last_cmd = None
     t_last_cmd = None
@@ -286,14 +290,14 @@ def main():
             if effective in ("PAUSED", "RETRACT"):
                 if action == "segment":
                     fa.stop_skill()
-                    action = None
+                    action, t_stopped = None, time.time()
                     event = report_event("pause: stop_skill() in '%s'" % plan[idx]["name"])
                 elif action == "soldering":
                     action = None
                     event = report_event("pause: point '%s' interrupted" % plan[idx - 1]["name"])
                 elif action == "retract" and effective == "PAUSED":
                     fa.stop_skill()
-                    action = None
+                    action, t_stopped = None, time.time()
                     event = report_event("pause: retraction stopped")
 
             if effective == "RETRACT":
@@ -301,7 +305,7 @@ def main():
                     action = None
                     retracted = True
                     event = report_event("retraction done: holding still")
-                elif action is None and not retracted:
+                elif action is None and not retracted and time.time() - t_stopped >= STOP_SETTLE_S:
                     T = fa.get_pose()
                     t = [float(x) for x in T.translation]
                     t[2] += RETRACT_M
@@ -312,7 +316,7 @@ def main():
             elif effective != "PAUSED":
                 if action == "retract":
                     fa.stop_skill()
-                    action = None
+                    action, t_stopped = None, time.time()
                 retracted = False
                 if action == "soldering" and time.time() >= t_wait_end:
                     action = None
@@ -338,7 +342,7 @@ def main():
                         t_wait_end = time.time() + seg["wait"]
                         event = report_event("soldering at '%s' (%.1f s)" % (seg["name"], seg["wait"]))
 
-                if action is None and idx < len(plan):
+                if action is None and idx < len(plan) and time.time() - t_stopped >= STOP_SETTLE_S:
                     seg = plan[idx]
                     q = fa.get_joints()
                     resuming = q_segment_start is not None
