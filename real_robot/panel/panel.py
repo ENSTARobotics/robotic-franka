@@ -524,6 +524,7 @@ def scene():
 
 def make_handler(panel, token):
     page = open(os.path.join(PANEL_DIR, "index.html"), encoding="utf-8").read().replace("{{TOKEN}}", token)
+    icon = open(os.path.join(PANEL_DIR, "icon.svg"), encoding="utf-8").read()
     allowed_hosts = {"127.0.0.1:%d" % PORT, "localhost:%d" % PORT}
 
     class Handler(BaseHTTPRequestHandler):
@@ -549,6 +550,8 @@ def make_handler(panel, token):
             url = urlparse(self.path)
             if url.path == "/":
                 return self._send(200, page, "text/html")
+            if url.path == "/icon.svg":
+                return self._send(200, icon, "image/svg+xml")
             if self.headers.get("X-Token") != token:
                 return self._send(403, {"error": "bad token"})
             if url.path == "/api/status":

@@ -14,7 +14,8 @@ Type=Application
 Name=Aided Building
 Comment=Control panel for the soldering robot
 Exec=$DIR/open_panel.sh
-Icon=applications-engineering
+Icon=$DIR/icon.svg
+StartupWMClass=chrome-127.0.0.1__-Default
 Terminal=false
 Categories=Development;
 EOF

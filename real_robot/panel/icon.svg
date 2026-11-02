@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <!-- Aided Building: a robot arm holding the soldering iron over a PCB -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2b3445"/>
+      <stop offset="1" stop-color="#151a24"/>
+    </linearGradient>
+    <linearGradient id="board" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1f9a55"/>
+      <stop offset="1" stop-color="#127040"/>
+    </linearGradient>
+    <linearGradient id="link" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#d4d9e2"/>
+    </linearGradient>
+    <radialGradient id="glow">
+      <stop offset="0" stop-color="#fff6c8"/>
+      <stop offset="0.35" stop-color="#ffc23d" stop-opacity="0.9"/>
+      <stop offset="1" stop-color="#ff8a00" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect x="8" y="8" width="240" height="240" rx="52" fill="url(#bg)"/>
+
+  <!-- PCB, seen in perspective -->
+  <path d="M40 178 L216 178 L232 222 L24 222 Z" fill="#0b4f2c"/>
+  <path d="M44 170 L212 170 L228 212 L28 212 Z" fill="url(#board)"/>
+  <g stroke="#7fe0a6" stroke-width="3" fill="none" stroke-linecap="round" opacity="0.55">
+    <path d="M70 182 H104 L112 194 H150"/>
+    <path d="M62 202 H96 L104 190"/>
+    <path d="M190 182 H170 L162 196 H120"/>
+  </g>
+  <g fill="#f2c14e">
+    <ellipse cx="70" cy="182" rx="7" ry="4"/>
+    <ellipse cx="150" cy="194" rx="7" ry="4"/>
+    <ellipse cx="190" cy="182" rx="7" ry="4"/>
+    <ellipse cx="62" cy="202" rx="7" ry="4"/>
+    <ellipse cx="128" cy="184" rx="9" ry="5"/>
+  </g>
+
+  <!-- the arm: base, two links and the wrist -->
+  <rect x="164" y="132" width="44" height="18" rx="6" fill="#3a4252"/>
+  <path d="M186 140 L196 76" stroke="url(#link)" stroke-width="26" stroke-linecap="round"/>
+  <path d="M196 76 L128 58" stroke="url(#link)" stroke-width="22" stroke-linecap="round"/>
+  <circle cx="186" cy="140" r="15" fill="#2b3445"/>
+  <circle cx="186" cy="140" r="8" fill="#ff7a1a"/>
+  <circle cx="196" cy="76" r="14" fill="#2b3445"/>
+  <circle cx="196" cy="76" r="7" fill="#ff7a1a"/>
+  <circle cx="128" cy="58" r="12" fill="#2b3445"/>
+  <circle cx="128" cy="58" r="6" fill="#ff7a1a"/>
+
+  <!-- soldering iron going down to the pad -->
+  <rect x="120" y="68" width="16" height="44" rx="5" fill="#ff7a1a"/>
+  <rect x="123" y="110" width="10" height="34" rx="3" fill="#c7ccd6"/>
+  <path d="M123 144 L133 144 L128 170 Z" fill="#9aa1ad"/>
+
+  <!-- the hot joint -->
+  <circle cx="128" cy="180" r="24" fill="url(#glow)"/>
+  <g stroke="#ffd36b" stroke-width="3" stroke-linecap="round">
+    <path d="M104 166 L96 160"/>
+    <path d="M152 166 L160 160"/>
+  </g>
+</svg>
