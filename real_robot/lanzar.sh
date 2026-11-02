@@ -5,20 +5,24 @@
 #   ./lanzar.sh --ciclo         # ciclo entre poses en vez de la placa
 #   ./lanzar.sh --simulado      # sin robot ni Docker
 #   ./lanzar.sh --solo-mostrar  # enseña los comandos sin abrir nada
+#   ./lanzar.sh --reiniciar     # cierra todo, robot incluido, y arranca desde cero (combinable)
+#   ./lanzar.sh --parar         # sólo cierra todo
 # El robot no se mueve hasta pulsar Enter en el controlador y dar paso con "yes" o con la tecla a.
 DIR=$(dirname "$(realpath "$0")")
 CONTENEDOR=franka_container
 # Con -v ~/carpeta:/root/carpeta, la ruta del contenedor es la misma con /root en vez de $HOME
 RUTA_CONTENEDOR=/root/${DIR#"$HOME"/}
 
-ESCALA=0.3; V_NORMAL=0.3; V_CAUTIOUS=0.15; RUTINA=--placa; SIMULADO=0; MOSTRAR=0
+ESCALA=0.3; V_NORMAL=0.3; V_CAUTIOUS=0.15; RUTINA=--placa; SIMULADO=0; MOSTRAR=0; PARAR=0; SEGUIR=1
 for arg in "$@"; do
     case $arg in
         --normal) ESCALA=0.6; V_NORMAL=0.6; V_CAUTIOUS=0.3 ;;
         --ciclo) RUTINA="--ciclos 1" ;;
         --simulado) SIMULADO=1 ;;
         --solo-mostrar) MOSTRAR=1 ;;
-        *) sed -n '2,7p' "$0"; exit 1 ;;
+        --reiniciar) PARAR=1 ;;
+        --parar) PARAR=1; SEGUIR=0 ;;
+        *) sed -n '2,9p' "$0"; exit 1 ;;
     esac
 done
 
@@ -26,6 +30,33 @@ PY=$DIR/.venv/bin/python
 [ -x "$PY" ] || PY=$HOME/aided_building/.venv/bin/python
 [ -x "$PY" ] || { echo "[error] no encuentro .venv: mira SETUP.md"; exit 1; }
 [ "$MOSTRAR" = 1 ] || command -v gnome-terminal >/dev/null || { echo "[error] hace falta gnome-terminal"; exit 1; }
+
+parar_todo() {
+    # El supervisor primero: al cerrarse manda PAUSED, y sin él el controlador para el robot en 0.5 s
+    if [ "$MOSTRAR" = 1 ]; then
+        echo "(cerraría supervisor, controlador, percepción, pantalla, diálogo y el stack, en ese orden)"
+        return
+    fi
+    echo "Cerrando todo..."
+    pkill -INT -f 'supervisor/[s]upervisor(_teclado)?\.py'
+    sleep 1
+    pkill -INT -f 'dialogo/[d]ialogo\.py|pantalla/[p]antalla\.py|percepcion/([r]ostro|[v]oz|[p]laca)\.py|robot/[c]ontrolador_ciclo\.py'
+    if ps -eo args | grep -qE '[b]uild/franka_interface|[r]oscore|python3 [c]ontrolador_ciclo'; then
+        echo "Para cerrar los programas del robot hace falta tu contraseña:"
+        sudo docker exec "$CONTENEDOR" bash -c "pkill -INT -f '[c]ontrolador_ciclo'; sleep 2
+            pkill -INT -f '[f]ranka_gripper.launch'; sleep 2
+            pkill -INT -f '[f]ranka_ros_interface.launch'; sleep 2
+            pkill -INT -f 'build/[f]ranka_interface'; sleep 2
+            pkill -INT -x roscore; sleep 2"
+        if ps -eo args | grep -qE '[b]uild/franka_interface|bin/[r]oscore'; then
+            echo "Algunos siguen abiertos: reinicio el contenedor."
+            sudo docker restart "$CONTENEDOR" >/dev/null
+        fi
+    fi
+    echo "Todo cerrado. Las pestañas antiguas puedes cerrarlas: ya no ejecutan nada."
+}
+[ "$PARAR" = 1 ] && parar_todo
+[ "$SEGUIR" = 1 ] || exit 0
 
 primera=1
 pestana() {                             # pestana <título> <comando>; queda abierta para leer errores
@@ -69,11 +100,7 @@ pestana Supervisor "python3 '$DIR/supervisor/supervisor.py' --v-normal $V_NORMAL
 pestana Cara "'$PY' '$DIR/percepcion/rostro.py'"
 pestana Voz "'$PY' '$DIR/percepcion/voz.py'"
 pestana Pantalla "'$PY' '$DIR/pantalla/pantalla.py'"
-if [ -f "$DIR/datos/placa_referencia.png" ]; then
-    pestana Placa "'$PY' '$DIR/percepcion/placa.py'"
-else
-    echo "Sin comprobar la placa: falta la referencia (percepcion/placa.py --referencia, con la mesa vacía)."
-fi
+pestana Placa "'$PY' '$DIR/percepcion/placa.py'"
 sleep 3                                 # que la voz mida el ruido de fondo antes de que el robot salude
 pestana Dialogo "'$PY' '$DIR/dialogo/dialogo.py'"
 

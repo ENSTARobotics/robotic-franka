@@ -29,6 +29,11 @@ import socket
 import sys
 import time
 
+# Las bibliotecas numéricas usan todos los núcleos por defecto y saturan la CPU: sin kernel RT eso
+# provoca communication_constraints_violation en el robot. Tiene que ir antes de importar numpy.
+for _variable in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMBA_NUM_THREADS"):
+    os.environ.setdefault(_variable, "1")
+
 import numpy as np
 
 import microfono
@@ -195,6 +200,7 @@ def main():
     import sounddevice as sd
     import librosa
     import torch
+    torch.set_num_threads(1)
     if args.cpu:
         dispositivo = "cpu"
     elif torch.cuda.is_available():

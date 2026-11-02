@@ -1,9 +1,12 @@
 """Fusión de la percepción en un índice de confianza T(t) y máquina de estados de seguridad.
 
 Cada fuente (rostro, audio, ...) envía estrés en [0, 1] y una confianza en [0, 1]:
-    estrés fusionado = sum(peso_i * confianza_i * estres_i) / sum(peso_i * confianza_i)
+    estrés fusionado = sum(peso_i * confianza_i * estres_i) / (CONF_PREVIA + sum(peso_i * confianza_i))
     T(t)             = 1 - estrés fusionado, suavizado con constante de tiempo TAU_T
 Una fuente cuenta sólo si su último mensaje tiene menos de EDAD_MAX s y confianza > CONF_MIN.
+
+CONF_PREVIA tira hacia "sin estrés" cuando hay poca confianza total: sin ella, una sola fuente con
+confianza 0.1 contaba como si fuera segura y paraba el robot por una falsa alarma.
 
 Máquina de estados (con histéresis):
     bajar es inmediato:  NORMAL -> CAUTIOUS si T < T_CAUTIOUS;  cualquiera -> PAUSED si T < T_PAUSA
@@ -17,6 +20,7 @@ import time
 PESOS = {"rostro": 1.0, "audio": 1.0}
 EDAD_MAX = 1.0              # s: un mensaje más viejo no cuenta
 CONF_MIN = 0.05
+CONF_PREVIA = 0.2           # peso de la hipótesis "sin estrés" en la media
 TAU_T = 0.5                 # s: suavizado de T(t)
 
 T_CAUTIOUS = 0.6            # T por debajo -> CAUTIOUS
@@ -57,7 +61,7 @@ class Confianza(object):
         validas = self.validas(ahora)
         suma_w = sum(PESOS.get(f, 1.0) * c for f, (_, c) in validas.items())
         if suma_w > 0:
-            self.estres = sum(PESOS.get(f, 1.0) * c * s for f, (s, c) in validas.items()) / suma_w
+            self.estres = sum(PESOS.get(f, 1.0) * c * s for f, (s, c) in validas.items()) / (CONF_PREVIA + suma_w)
             # Desde el mensaje válido más reciente (no desde ahora): SIN_DATOS cuenta desde él
             self.t_ultima_valida = max(self.ultimo[f][0] for f in validas)
             T_inst = 1.0 - self.estres

@@ -10,14 +10,22 @@ Recibe por UDP:
 Si falta alguno, lo dice en la pantalla y sigue esperando. q o Esc para salir.
 """
 import argparse
+import functools
 import json
 import os
 import socket
 import time
 
+# Las bibliotecas numéricas usan todos los núcleos por defecto y saturan la CPU: sin kernel RT eso
+# provoca communication_constraints_violation en el robot. Tiene que ir antes de importar numpy.
+for _variable in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMBA_NUM_THREADS"):
+    os.environ.setdefault(_variable, "1")
+
 import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
+
+cv2.setNumThreads(1)
 
 # Fuentes para las ventanas de OpenCV (Qt): al importarse apunta a una carpeta suya que no existe y avisa
 os.environ["QT_QPA_FONTDIR"] = "/usr/share/fonts/truetype/dejavu"
@@ -27,7 +35,7 @@ PUERTO_PANEL = 5011
 PUERTO_IMAGEN = 5012
 ANCHO, ALTO = 1280, 720
 ANCHO_CAMARA = 760
-HZ = 15.0
+HZ = 10.0
 SIN_DATOS_S = 1.0           # s sin mensajes -> "sin conexión"
 
 FUENTE = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
@@ -57,7 +65,9 @@ EXPRESION = {"angry": "Enfado", "disgust": "Asco", "fear": "Miedo", "fearful": "
              "neutral": "Neutral"}
 
 
+@functools.lru_cache(maxsize=None)
 def fuente(tam, negrita=False):
+    """Cacheada: abrir la fuente en cada texto de cada cuadro gasta mucha CPU."""
     return ImageFont.truetype(FUENTE_NEGRITA if negrita else FUENTE, tam)
 
 

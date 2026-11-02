@@ -50,7 +50,7 @@ RESET = "\033[0m"
 COLUMNAS = (["t_host", "tecla", "modo", "cmd_state", "cmd_speed_scale", "cmd_retract", "T", "estres",
              "sin_datos", "motivo"]
             + ["%s_%s" % (f, k) for f in FUENTES for k in ("estres", "confianza", "etiqueta", "edad_s")]
-            + ["rob_edad_s", "rob_state", "rob_segment", "rob_action", "rob_speed_scale", "rob_event",
+            + ["rob_edad_s", "rob_state", "rob_segment", "rob_action", "rob_speed_scale", "rob_event", "rob_done", "rob_error",
                "ee_x", "ee_y", "ee_z"])
 
 
@@ -242,7 +242,7 @@ def main():
                     fila += ["", "", "", ""]
             ee = robot.get("ee_xyz") or [""] * 3
             fila += ["" if edad is None else round(edad, 3)] + [robot.get(k, "") for k in
-                     ("state", "segment", "action", "speed_scale", "event")] + list(ee)
+                     ("state", "segment", "action", "speed_scale", "event", "done", "error")] + list(ee)
             log.writerow(fila)
             if t_tick - t_flush >= 1.0:
                 f_csv.flush()

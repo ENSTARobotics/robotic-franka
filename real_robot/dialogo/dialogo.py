@@ -25,6 +25,11 @@ import sys
 import threading
 import time
 
+# Las bibliotecas numéricas usan todos los núcleos por defecto y saturan la CPU: sin kernel RT eso
+# provoca communication_constraints_violation en el robot. Tiene que ir antes de importar numpy.
+for _variable in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMBA_NUM_THREADS"):
+    os.environ.setdefault(_variable, "1")
+
 import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, "percepcion"))

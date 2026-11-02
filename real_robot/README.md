@@ -35,7 +35,7 @@ percepcion/               runs on the host (needs .venv)
   microfono.py              picks the microphone by name (default: C930e); voz.py and dialogo.py share it
   mini_xception.py          Joab's ROB311 network, converted from Keras to PyTorch
   convertir_pesos.py        verified Keras -> PyTorch conversion (only to redo it; needs TensorFlow)
-  placa.py                  checks that the PCB is in place, comparing with a photo of the empty table
+  placa.py                  checks that a non-white rectangle (the PCB) is in place
   detectar_aruco.py         finds the dictionary and ids of the ArUco markers in a photo
   modelos/                  YuNet, mini-Xception, voice CNN and their licenses
 pantalla/pantalla.py      operator screen: camera, face and voice expression, state, robot
@@ -144,12 +144,12 @@ an additional channel: the emergency stop remains the main one.**
 ## PCB check (`placa.py`, optional)
 
 The camera that sees the table finds the 4 ArUco markers, which locate the recorded PCB corners in the image.
-The program compares that zone with a reference photo of the empty table, so it works with any board without
-training. It detects "something is there", not what it is: a hand held still over the zone also counts.
+Inside that zone the program looks for a rectangular shape of a different color from the white base, so it needs
+no training or reference photo. A hand does not count, because it is not rectangular; a white board would not
+be detected.
 
 ```bash
-.venv/bin/python percepcion/placa.py --referencia     # once, with the table EMPTY
-.venv/bin/python percepcion/placa.py --ver            # shows the zone and the amount of change
+.venv/bin/python percepcion/placa.py --ver     # shows the zone, how much it is covered and how rectangular
 ```
 
 With it running, the robot asks for the PCB until it is there ("Please place the PCB on the table.", then "PCB

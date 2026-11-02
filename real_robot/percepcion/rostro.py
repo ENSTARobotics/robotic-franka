@@ -26,8 +26,15 @@ import socket
 import sys
 import time
 
+# Las bibliotecas numéricas usan todos los núcleos por defecto y saturan la CPU: sin kernel RT eso
+# provoca communication_constraints_violation en el robot. Tiene que ir antes de importar numpy.
+for _variable in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMBA_NUM_THREADS"):
+    os.environ.setdefault(_variable, "1")
+
 import cv2
 import numpy as np
+
+cv2.setNumThreads(2)
 
 DIR_MODELOS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "modelos")
 IP = "127.0.0.1"
@@ -142,6 +149,7 @@ def main():
     args = p.parse_args()
 
     import torch
+    torch.set_num_threads(1)
     if args.cpu:
         dispositivo = "cpu"
     elif torch.cuda.is_available():
