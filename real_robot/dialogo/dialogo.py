@@ -59,6 +59,7 @@ FRASES = {
     "bienvenida": "Welcome! I'm your soldering assistant. Shall we begin?",
     "placa_falta": "Welcome! Please place the PCB on the table.",
     "placa_recuerda": "Please place the PCB on the table first.",
+    "placa_perdida": "I can't see the PCB. Please place it in the work area and move your hands away.",
     "placa_ok": "PCB detected. Shall we begin?",
     "bienvenida_placa": "Welcome! PCB detected. Shall we begin?",
     "empezamos": "Great, let's start. Say stop at any time.",
@@ -310,8 +311,9 @@ def main():
                     comando("lento")
                     voz.decir("lento")
                     t_ultimo_aviso = t_tick
-                elif intencion == "si" and fase == "espera_placa":
+                elif intencion == "si" and (fase == "espera_placa" or (fase == "espera_inicio" and placa is False)):
                     voz.decir("placa_recuerda")
+                    fase = "espera_placa"
                 elif intencion == "si" and fase == "espera_inicio":
                     comando("empezar")
                     voz.decir("empezamos")
@@ -340,9 +342,13 @@ def main():
                 elif t_tick - t_conectado >= ESPERA_PLACA_S:
                     voz.decir("bienvenida")
                     fase = "espera_inicio"
-            elif conectado and fase == "espera_placa" and placa is not False:
+            elif conectado and fase == "espera_placa" and placa is not False and not calibrando and not voz.ocupado():
                 voz.decir("placa_ok" if placa else "bienvenida")
                 fase = "espera_inicio"
+            # Una mano sobre la placa también la oculta. Sólo se avisa antes de empezar: trabajando, el brazo la tapa
+            elif conectado and fase == "espera_inicio" and placa is False and not calibrando and not voz.ocupado():
+                voz.decir("placa_perdida")
+                fase = "espera_placa"
             # Si arranca o sigue desde el teclado (a, n, c, r), el diálogo no se queda esperando un "yes"
             if conectado and fase in ("espera_placa", "espera_inicio", "pregunta_seguir", "espera_reanudar") \
                     and t_tick - t_orden_voz > 1.0 \

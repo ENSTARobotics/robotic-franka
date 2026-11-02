@@ -158,7 +158,9 @@ be detected.
 ```
 
 With it running, the robot asks for the PCB until it is there ("Please place the PCB on the table.", then "PCB
-detected. Shall we begin?"). Without it, the robot greets as usual.
+detected. Shall we begin?"). Without it, the robot greets as usual. Until the routine starts it keeps checking: if
+the PCB stops being visible, a hand over it included, the robot says so and *yes* does not start it. During the
+routine it does not check, because the arm itself covers the PCB.
 
 ## Without the robot
 
