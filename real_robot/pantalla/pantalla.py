@@ -11,12 +11,16 @@ Si falta alguno, lo dice en la pantalla y sigue esperando. q o Esc para salir.
 """
 import argparse
 import json
+import os
 import socket
 import time
 
 import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
+
+# Fuentes para las ventanas de OpenCV (Qt): al importarse apunta a una carpeta suya que no existe y avisa
+os.environ["QT_QPA_FONTDIR"] = "/usr/share/fonts/truetype/dejavu"
 
 IP = "127.0.0.1"
 PUERTO_PANEL = 5011
@@ -192,30 +196,34 @@ def main():
         cv2.resizeWindow(ventana, ANCHO, ALTO)
 
     panel, t_panel, camara, t_camara = None, 0.0, None, 0.0
-    while True:
-        t_tick = time.time()
+    try:
         while True:
-            try:
-                datos, _ = sock_panel.recvfrom(65536)
-                panel, t_panel = json.loads(datos.decode("utf-8")), t_tick
-            except (BlockingIOError, socket.error):
-                break
-            except ValueError:
-                pass
-        while True:
-            try:
-                datos, _ = sock_imagen.recvfrom(65536)
-            except (BlockingIOError, socket.error):
-                break
-            imagen = cv2.imdecode(np.frombuffer(datos, np.uint8), cv2.IMREAD_COLOR)
-            if imagen is not None:
-                camara, t_camara = imagen, t_tick
+            t_tick = time.time()
+            while True:
+                try:
+                    datos, _ = sock_panel.recvfrom(65536)
+                    panel, t_panel = json.loads(datos.decode("utf-8")), t_tick
+                except (BlockingIOError, socket.error):
+                    break
+                except ValueError:
+                    pass
+            while True:
+                try:
+                    datos, _ = sock_imagen.recvfrom(65536)
+                except (BlockingIOError, socket.error):
+                    break
+                imagen = cv2.imdecode(np.frombuffer(datos, np.uint8), cv2.IMREAD_COLOR)
+                if imagen is not None:
+                    camara, t_camara = imagen, t_tick
 
-        cv2.imshow(ventana, componer(panel, t_panel, camara, t_camara, t_tick))
-        if (cv2.waitKey(1) & 0xFF) in (ord("q"), 27):
-            break
-        time.sleep(max(0.0, 1.0 / HZ - (time.time() - t_tick)))
-    cv2.destroyAllWindows()
+            cv2.imshow(ventana, componer(panel, t_panel, camara, t_camara, t_tick))
+            if (cv2.waitKey(1) & 0xFF) in (ord("q"), 27):
+                break
+            time.sleep(max(0.0, 1.0 / HZ - (time.time() - t_tick)))
+    except KeyboardInterrupt:
+        pass
+    finally:
+        cv2.destroyAllWindows()
 
 
 if __name__ == "__main__":
