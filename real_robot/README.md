@@ -119,8 +119,13 @@ automatic mode, *no* waits. During the task:
 - It announces what the trust index decides ("I noticed some tension, so I'm slowing down.", "Back to
   normal speed.").
 
-While it speaks, the microphone is ignored, so it does not hear itself. **Voice "stop" is an additional
-channel: the emergency stop remains the main one.**
+- It narrates the task ("Moving to point two of six.", "Working on point two.", "Returning to home.");
+  `--sin-narracion` turns this off.
+
+While it speaks, the microphone is ignored, so it does not hear itself. The exception is narration, when
+only "stop" is accepted, so that the operator can still stop it. Narration phrases were checked against the
+recognizer with repetitions: words like "start" and "soldering" can be misheard as "stop". **Voice "stop" is
+an additional channel: the emergency stop remains the main one.**
 
 ## UDP ports (all on 127.0.0.1)
 

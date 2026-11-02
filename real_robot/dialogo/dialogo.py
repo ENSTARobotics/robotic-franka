@@ -66,6 +66,15 @@ FRASES = {
 }
 
 
+# Narración de la tarea. Comprobadas contra Vosk, con repeticiones porque Piper varía, para que no se oigan
+# como "stop". Evitar "start" y "soldering", que sí se confunden a veces.
+NUMEROS = ["one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve",
+           "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen", "twenty",
+           "twenty one", "twenty two", "twenty three", "twenty four", "twenty five"]
+FRASES_CICLO = {"aproximacion": "Approaching the board.", "soldadura": "Working on the board.",
+                "retraccion": "Moving away from the board.", "home": "Returning to home."}
+
+
 class Voz(object):
     """Piper en un hilo: decir() no bloquea. callback_hablando(t_fin) avisa de cada frase."""
 
@@ -73,6 +82,7 @@ class Voz(object):
         self.mudo, self.callback_hablando = mudo, callback_hablando
         self.cola = queue.Queue()
         self.hablando_hasta = 0.0
+        self.narrando = False               # la frase actual es narración: se sigue oyendo "stop"
         if not mudo:
             from piper import PiperVoice
             import sounddevice as sd
@@ -86,14 +96,17 @@ class Voz(object):
                 self.cola.get_nowait()
             if not self.mudo:
                 self.sd.stop()
-        self.cola.put(FRASES[clave])
+        self.cola.put((FRASES[clave], False))
+
+    def narrar(self, texto):
+        self.cola.put((texto, True))
 
     def ocupado(self):
         return not self.cola.empty() or time.time() < self.hablando_hasta
 
     def _bucle(self):
         while True:
-            texto = self.cola.get()
+            texto, self.narrando = self.cola.get()
             if self.mudo:
                 print("\r\033[K[robot dice] %s" % texto)
                 self.hablando_hasta = time.time() + 0.06 * len(texto)
@@ -128,18 +141,25 @@ class Oido(object):
         self.flujo.start()
 
     def _audio(self, datos, frames, tiempo, estado):
-        if time.time() < self.voz.hablando_hasta + MARGEN_ECO:
+        hablando = time.time() < self.voz.hablando_hasta + MARGEN_ECO
+        if hablando and not self.voz.narrando:
             self.rec.Reset()                # no oírse a sí mismo
             self._ya_parado = False
             return
+        # Mientras narra sólo vale "stop": sus frases se eligieron para no confundirse con ella, y si no
+        # el operador no podría pararlo durante gran parte de la tarea
+        parar = {"stop"} if hablando else PARAR
         if self.rec.AcceptWaveform(bytes(datos)):
-            texto = json.loads(self.rec.Result()).get("text", "")
-            if not (self._ya_parado and set(texto.split()) <= PARAR):
-                self._poner(texto)
+            palabras = set(json.loads(self.rec.Result()).get("text", "").split())
+            if hablando:
+                if "stop" in palabras and not self._ya_parado:
+                    self._poner("stop")
+            elif not (self._ya_parado and palabras <= PARAR):
+                self._poner(" ".join(sorted(palabras)))
             self._ya_parado = False
         else:
             parcial = json.loads(self.rec.PartialResult()).get("partial", "")
-            if not self._ya_parado and PARAR & set(parcial.split()):
+            if not self._ya_parado and parar & set(parcial.split()):
                 self._ya_parado = True      # stop urgente: no esperar al final
                 self._poner("stop")
 
@@ -147,6 +167,21 @@ class Oido(object):
         texto = texto.replace("[unk]", "").strip()
         if texto:
             self.palabras.put(texto)
+
+
+def narracion(robot):
+    """(id, frase) de la etapa actual de la tarea, o None si no hay nada que anunciar."""
+    segmento, accion = robot.get("segment") or "", robot.get("action") or ""
+    if "_p" in segmento:
+        punto = int(segmento.split("_p")[-1])
+        total = max(1, ((robot.get("n_segments") or 0) - 2) // 3)
+        if accion == "soldando":
+            return "soldar%d" % punto, "Working on point %s." % NUMEROS[punto - 1]
+        if segmento.startswith("sobre") and accion == "segmento":
+            return "ir%d" % punto, "Moving to point %s of %s." % (NUMEROS[punto - 1], NUMEROS[total - 1])
+    elif accion == "segmento" and segmento in FRASES_CICLO:
+        return segmento, FRASES_CICLO[segmento]
+    return None
 
 
 def clasificar(texto):
@@ -167,6 +202,7 @@ def main():
     p.add_argument("--voz", default="en_US-lessac-medium", help="modelo Piper en dialogo/modelos/")
     p.add_argument("--dispositivo", default=microfono.MICROFONO,
                    help="micrófono: parte de su nombre, o 'sistema' (por defecto %s)" % microfono.MICROFONO)
+    p.add_argument("--sin-narracion", action="store_true", help="no anunciar cada punto de la tarea")
     p.add_argument("--teclado", action="store_true", help="escribir las palabras en vez de hablar (pruebas)")
     p.add_argument("--mudo", action="store_true", help="mostrar las frases en vez de decirlas (pruebas)")
     args = p.parse_args()
@@ -189,6 +225,7 @@ def main():
     fase = "esperando_supervisor"     # -> espera_inicio -> trabajando <-> pregunta_seguir / espera_reanudar -> fin
     resumen, t_resumen, previo, t_ultimo_aviso = None, 0.0, None, 0.0
     pendiente = None                  # (aviso, estado al que se refiere): se dirá cuando toque
+    ultima_etapa = None               # última etapa de la tarea anunciada
     try:
         while True:
             t_tick = time.time()
@@ -264,6 +301,14 @@ def main():
                                   (t_tick - t_ultimo_aviso >= PAUSA_FRASES and not voz.ocupado())):
                     voz.decir(pendiente[0], urgente=actual[0] == "PAUSED")
                     pendiente, t_ultimo_aviso = None, t_tick
+                # Narración: sólo si no hay nada más urgente. Si está hablando, espera y anuncia la
+                # etapa que toque entonces, sin acumular frases atrasadas
+                if not args.sin_narracion and not pendiente and actual[0] in ("NORMAL", "CAUTIOUS") \
+                        and not voz.ocupado():
+                    etapa = narracion(robot)
+                    if etapa and etapa[0] != ultima_etapa:
+                        voz.narrar(etapa[1])
+                        ultima_etapa = etapa[0]
                 previo = actual
             elif conectado:
                 previo = (resumen.get("estado"), resumen.get("causa"))
