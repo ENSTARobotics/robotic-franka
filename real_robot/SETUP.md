@@ -95,6 +95,9 @@ Choose your speakers in *Settings → Sound*. Cameras and microphones are chosen
 
 ## 5. Start the stack (inside the container)
 
+From the second time on, `./lanzar.sh`, run from the Ubuntu Terminal, does this for you: see
+[Quick start](README.md#quick-start). The first time, do it by hand so you can see each step.
+
 In **each** container terminal:
 
 ```bash

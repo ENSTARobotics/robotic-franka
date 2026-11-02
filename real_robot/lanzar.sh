@@ -1,5 +1,5 @@
 #!/bin/bash
-# Abre en pestañas todo lo necesario. Se ejecuta en el host, en un terminal de Ubuntu.
+# Abre en pestañas todo lo necesario. Se ejecuta en el host, en la Terminal de Ubuntu (no en la de VS Code).
 #   ./lanzar.sh                 # robot real, velocidad lenta, rutina sobre la placa
 #   ./lanzar.sh --normal        # velocidad normal (0.6)
 #   ./lanzar.sh --ciclo         # ciclo entre poses en vez de la placa
@@ -25,6 +25,13 @@ for arg in "$@"; do
         *) sed -n '2,9p' "$0"; exit 1 ;;
     esac
 done
+
+# La terminal de VS Code (instalado como snap) arrastra variables que impiden abrir gnome-terminal
+if [ "$MOSTRAR" = 0 ] && [ "$SEGUIR" = 1 ] && { [ "$TERM_PROGRAM" = vscode ] || [ -n "$VSCODE_PID" ] || [ -n "$SNAP" ]; }; then
+    echo "[error] Lánzalo desde la Terminal de Ubuntu (Ctrl+Alt+T): desde VS Code no se abren las pestañas."
+    echo "        Para ver los comandos y abrirlos a mano: ./lanzar.sh --solo-mostrar"
+    exit 1
+fi
 
 PY=$DIR/.venv/bin/python
 [ -x "$PY" ] || PY=$HOME/aided_building/.venv/bin/python

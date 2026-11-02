@@ -49,6 +49,44 @@ logs/                     one CSV per session (not in git)
 
 Program names, command-line options and code comments are in Spanish; the operator screen too.
 
+## Quick start
+
+Start from the **Ubuntu Terminal (Ctrl+Alt+T), not from the VS Code terminal**: `lanzar.sh` opens its programs in
+`gnome-terminal` tabs, and those do not open from VS Code, so the script stops and tells you.
+
+Before starting: in Desk, joints unlocked (blue light) and FCI active; emergency stop in your hand.
+
+```bash
+cd ~/robotic-franka/real_robot      # or wherever you cloned it
+./lanzar.sh
+```
+
+1. **Stack tab:** the script opens it after you press Enter. Type your password and wait for `stack listo`, then go
+   back and press Enter.
+2. **Controller tab:** type your password, check what it prints and press Enter there. Then press Enter in the
+   first terminal. The other tabs open: Supervisor, Cara, Voz, Pantalla, Placa and Dialogo.
+3. **Calibrate:** stay quiet for a few seconds. Then press `k` in the Supervisor tab, look at the camera and talk
+   normally for 20 s. Repeat this for each person.
+4. **Start:** put the PCB in place, keep your hands off it and answer *yes* when the robot asks. The `a` key in the
+   Supervisor tab also starts it, without checking the PCB.
+5. **Stop:** say *stop*, press `p` in the Supervisor tab, or use the emergency stop.
+6. **Shut down:** `q` in Supervisor and Ctrl+C in Stack (or `./lanzar.sh --parar`). Then, in Desk, deactivate FCI
+   and lock the joints.
+
+| Option | What it does |
+|---|---|
+| `--normal` | normal speed (0.6) instead of the slow one (0.3) |
+| `--ciclo` | cycle between recorded poses instead of the routine over the PCB |
+| `--simulado` | no robot and no Docker |
+| `--reiniciar` | closes everything, robot programs included, and starts again; use it if a port is in use or something was left open |
+| `--parar` | only closes everything |
+| `--solo-mostrar` | prints the commands without opening anything |
+
+**Other terminals (not tested).** We only use the Ubuntu Terminal. Terminator should also work, because `lanzar.sh`
+still opens its own `gnome-terminal` window. To see everything split on one screen, for example with Terminator,
+tmux or vim's `:terminal`, get the commands from `./lanzar.sh --solo-mostrar` and paste each one into its own pane,
+in the order printed. None of these three is installed on the lab laptop.
+
 ## Manual control
 
 ```bash
