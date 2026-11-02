@@ -63,6 +63,11 @@ FRASES = {
     "retomo_lento": "Okay, continuing slowly.",
     "normal": "You seem relaxed again. Back to normal speed.",
     "fin": "All done. Thank you for working with me!",
+    # Cambios manuales desde el teclado del supervisor
+    "manual_normal": "Okay, normal speed.",
+    "manual_lento": "Okay, going slower.",
+    "manual_pausa": "Okay, pausing.",
+    "manual_retirar": "Okay, moving away from the board.",
 }
 
 
@@ -164,8 +169,7 @@ class Oido(object):
                 self._poner("stop")
 
     def _poner(self, texto):
-        texto = texto.replace("[unk]", "").strip()
-        if texto:
+        if texto.replace("[unk]", "").strip():      # [unk] se conserva: clasificar() lo necesita
             self.palabras.put(texto)
 
 
@@ -190,6 +194,9 @@ def clasificar(texto):
         return "lento"
     if PARAR & palabras:
         return "parar"
+    # "yes" pone el robot en marcha: sólo vale la palabra sola, no una frase cualquiera encajada a la fuerza
+    if "[unk]" in palabras:
+        return None
     if NO & palabras:
         return "no"
     if SI & palabras or "go" in palabras:
@@ -225,6 +232,7 @@ def main():
     fase = "esperando_supervisor"     # -> espera_inicio -> trabajando <-> pregunta_seguir / espera_reanudar -> fin
     resumen, t_resumen, previo, t_ultimo_aviso = None, 0.0, None, 0.0
     pendiente = None                  # (aviso, estado al que se refiere): se dirá cuando toque
+    t_orden_voz = 0.0                 # el resumen tarda en reflejar una orden de voz recién enviada
     ultima_etapa = None               # última etapa de la tarea anunciada
     try:
         while True:
@@ -250,6 +258,7 @@ def main():
                 print("\r\033[K[oído] %r -> %s" % (texto, intencion or "nada"))
                 if intencion is None or not conectado:
                     continue
+                t_orden_voz = t_tick
                 if intencion == "parar" and fase in ("trabajando", "pregunta_seguir", "espera_reanudar"):
                     comando("pausa")                    # primero parar, luego hablar
                     if fase == "trabajando":
@@ -278,6 +287,11 @@ def main():
             if conectado and fase == "esperando_supervisor":
                 voz.decir("bienvenida")
                 fase = "espera_inicio"
+            # Si arranca o sigue desde el teclado (a, n, c, r), el diálogo no se queda esperando un "yes"
+            if conectado and fase in ("espera_inicio", "pregunta_seguir", "espera_reanudar") \
+                    and t_tick - t_orden_voz > 1.0 \
+                    and (resumen.get("modo") == "AUTO" or resumen.get("estado") != "PAUSED"):
+                fase = "trabajando"
             if conectado and fase == "trabajando":
                 robot = resumen.get("robot") or {}
                 actual = (resumen.get("estado"), resumen.get("causa"))
@@ -293,13 +307,19 @@ def main():
                         aviso = "retomo_lento"
                     if aviso:
                         pendiente = (aviso, actual)
-                # Decir el aviso pendiente si sigue siendo cierto: PAUSED al momento, el resto
-                # espaciado PAUSA_FRASES para no saturar al operador
+                elif resumen.get("modo") == "MANUAL" and previo is not None and actual != previo \
+                        and t_tick - t_orden_voz > 1.0:
+                    aviso = {"NORMAL": "manual_normal", "CAUTIOUS": "manual_lento", "PAUSED": "manual_pausa",
+                             "RETRACT": "manual_retirar"}.get(actual[0])
+                    if aviso:
+                        pendiente = (aviso, actual)
+                # Decir el aviso pendiente si sigue siendo cierto: las paradas y lo que pide el teclado al
+                # momento, el resto espaciado PAUSA_FRASES para no saturar al operador
                 if pendiente and pendiente[1] != actual:
                     pendiente = None
-                if pendiente and (actual[0] == "PAUSED" or
-                                  (t_tick - t_ultimo_aviso >= PAUSA_FRASES and not voz.ocupado())):
-                    voz.decir(pendiente[0], urgente=actual[0] == "PAUSED")
+                urgente = actual[0] in ("PAUSED", "RETRACT") or actual[1] == "manual"
+                if pendiente and (urgente or (t_tick - t_ultimo_aviso >= PAUSA_FRASES and not voz.ocupado())):
+                    voz.decir(pendiente[0], urgente=urgente)
                     pendiente, t_ultimo_aviso = None, t_tick
                 # Narración: sólo si no hay nada más urgente. Si está hablando, espera y anuncia la
                 # etapa que toque entonces, sin acumular frases atrasadas
