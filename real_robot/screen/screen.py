@@ -62,6 +62,7 @@ MESSAGE = {
     ("RETRACT", "manual"): "I moved away from the PCB",
     ("RETRACT", "hands"): "Hands near the PCB: moving away. Move them away",
     ("RETRACT", "hands_clear"): "Zone clear. Say \"continue\" to go on",
+    ("CAUTIOUS", "after_hands"): "Going slowly for a moment after the stop",
 }
 EXPRESSION = {"angry": "Anger", "disgust": "Disgust", "fear": "Fear", "fearful": "Fear",
               "happy": "Happiness", "sad": "Sadness", "surprise": "Surprise", "surprised": "Surprise",

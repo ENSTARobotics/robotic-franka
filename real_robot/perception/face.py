@@ -4,6 +4,7 @@
     python3 face.py --show                    # C920 webcam, with a preview window
     python3 face.py --camera C930e --show     # another camera, by name or by /dev/videoN number
     python3 face.py --image photo.jpg         # test with a still image (no camera)
+    python3 face.py --camera 0 --share-frames # laptop camera, also lending its images to hands.py
 
 YuNet detector (OpenCV) + mini-Xception (FER-2013, 7 expressions) from Joab's ROB311 lab (TD4,
 "face recognition": 61% accuracy on PrivateTest), ported to PyTorch and run on the GPU with
@@ -12,7 +13,9 @@ Sends to UDP 5010 about 10 times per second:
     {"t": .., "source": "face", "stress": 0..1 or null, "confidence": 0..1,
      "label": "Fear", "probs": {"Angry": .., ...}, "face": true}
 With no visible face: stress null and confidence 0 (the supervisor ignores it in the fusion).
-It also sends the annotated image (JPEG) to UDP 5012 for screen.py.
+It also sends the annotated image (JPEG) to UDP 5012 for screen.py. With --share-frames it sends the plain
+image to UDP 5019 too, for hands.py --frames-from-face: a camera can only be opened by one program, and
+with a single camera (the laptop's, in simulation) both need it.
 
 Note: a facial expression is not a reliable measure of the inner emotion; FER-2013 has
 low-resolution photos and unbalanced classes. That is why the confidence is sent too.
@@ -40,6 +43,7 @@ MODELS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
 IP = "127.0.0.1"
 PERCEPTION_PORT = 5010
 IMAGE_PORT = 5012           # annotated image for screen.py
+FRAMES_PORT = 5019          # plain image for hands.py (--share-frames)
 IMAGE_WIDTH = 640
 CAMERA = "C920"             # the C930e is for the hands
 HZ = 10.0
@@ -128,14 +132,14 @@ def annotate(bgr, box, message):
     return bgr
 
 
-def send_image(sock, bgr):
-    """Annotated image for screen.py (JPEG 640 px wide, fits in a UDP datagram)."""
+def send_image(sock, bgr, port=IMAGE_PORT):
+    """Image for screen.py or hands.py (JPEG 640 px wide, fits in a UDP datagram)."""
     scale = IMAGE_WIDTH / float(bgr.shape[1])
     small = cv2.resize(bgr, None, fx=scale, fy=scale) if scale < 1 else bgr
     for quality in (70, 50, 30):
         ok, jpg = cv2.imencode(".jpg", small, [cv2.IMWRITE_JPEG_QUALITY, quality])
         if ok and len(jpg) < 60000:
-            sock.sendto(jpg.tobytes(), (IP, IMAGE_PORT))
+            sock.sendto(jpg.tobytes(), (IP, port))
             return
 
 
@@ -146,6 +150,8 @@ def main():
     p.add_argument("--show", action="store_true", help="window with the face and the expression")
     p.add_argument("--hz", type=float, default=HZ)
     p.add_argument("--cpu", action="store_true", help="use the CPU even if there is a GPU")
+    p.add_argument("--share-frames", action="store_true",
+                   help="also send the plain image to UDP %d for hands.py --frames-from-face" % FRAMES_PORT)
     args = p.parse_args()
 
     import torch
@@ -183,6 +189,8 @@ def main():
             else:
                 bgr = still.copy()
 
+            if args.share_frames:
+                send_image(sock, bgr, FRAMES_PORT)      # before annotating it
             box = detector.largest_face(bgr)
             message = {"t": time.time(), "source": "face", "stress": None, "confidence": 0.0,
                        "label": "", "probs": {}, "face": box is not None}

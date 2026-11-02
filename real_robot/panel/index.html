@@ -56,6 +56,9 @@
            border: 1px solid var(--line); padding: 10px 16px; border-radius: 8px; display: none; }
   #hands { padding: 10px 12px; border-radius: 8px; background: #2b2e35; }
   #hands.near { background: var(--red); } #hands.lock { background: var(--blue); }
+  body.real .sim-only, body.sim .real-only { display: none !important; }
+  #view { width: 100%; height: 440px; display: block; background: #121317; border-radius: 8px; cursor: grab; touch-action: none; }
+  #view.dragging { cursor: grabbing; }
 </style>
 </head>
 <body>
@@ -63,7 +66,7 @@
   <h1>Aided Building · control panel</h1>
   <span id="busy"></span>
   <span style="flex:1"></span>
-  <button onclick="post({action:'open_desk'})">Open Desk</button>
+  <button class="real-only" onclick="post({action:'open_desk'})">Open Desk</button>
   <button class="stop" onclick="quitPanel()">Stop all and close</button>
 </header>
 
@@ -84,7 +87,7 @@
       <div class="seg" id="seg-speed">
         <button data-v="slow">Slow (0.3)</button><button data-v="normal">Normal (0.6)</button>
       </div>
-      <div class="muted">Programs</div>
+      <div class="muted">Programs <span id="sim-note"></span></div>
       <label><input type="checkbox" data-m="face"> Face (stress from the camera)</label>
       <label><input type="checkbox" data-m="voice"> Voice (stress from the mic)</label>
       <label><input type="checkbox" data-m="hands"> Hands + PCB check</label>
@@ -92,14 +95,17 @@
       <label><input type="checkbox" data-m="dialogue"> Robot speech</label>
     </section>
     <section>
-      <h2>Checks</h2>
-      <div class="check"><span class="dot" id="c-net"></span><span id="t-net">network</span></div>
-      <div class="check"><span class="dot" id="c-docker"></span><span id="t-docker">docker</span></div>
-      <div class="check"><span class="dot" id="c-stack"></span><span id="t-stack">stack</span></div>
-      <p class="muted">Before starting the real robot: in Desk, joints unlocked (blue light) and FCI active.
+      <h2 class="real-only">Checks</h2>
+      <h2 class="sim-only">Simulation</h2>
+      <p class="muted sim-only">Fake arm on this laptop: no network, Docker or Desk needed. Face, voice and speech use the
+        laptop's camera and microphone; drag the virtual hands in the 3D view.</p>
+      <div class="check real-only"><span class="dot" id="c-net"></span><span id="t-net">network</span></div>
+      <div class="check real-only"><span class="dot" id="c-docker"></span><span id="t-docker">docker</span></div>
+      <div class="check real-only"><span class="dot" id="c-stack"></span><span id="t-stack">stack</span></div>
+      <p class="muted real-only">Before starting the real robot: in Desk, joints unlocked (blue light) and FCI active.
         Someone holds the emergency stop.</p>
       <div class="row">
-        <button onclick="commTest()">Communication test</button>
+        <button class="real-only" onclick="commTest()">Communication test</button>
         <button onclick="post({action:'pcb_plan'}); showLog('pcb_plan')">Check PCB plan</button>
       </div>
     </section>
@@ -109,6 +115,10 @@
   <div class="col">
     <section>
       <h2>2 · System</h2>
+      <div class="row sim-only" style="margin-bottom:10px">
+        <button class="big blue" id="b-fullsim" onclick="fullSim()">▶ Run full simulation
+          <div class="muted" style="color:#dfe7ff;font-weight:400;font-size:13px">fake arm + face, voice, screen and speech with the C920 webcam (or the laptop's camera and mic); virtual hands to drag</div></button>
+      </div>
       <div class="row">
         <button class="big go" id="b-start" onclick="post({action:'start_system'})">Start system</button>
         <button class="big stop" onclick="post({action:'stop_all'})">Stop all</button>
@@ -117,6 +127,10 @@
     <section>
       <h2>3 · Routine</h2>
       <div id="state"><div class="title" id="s-title">NOT CONNECTED</div><div class="reason" id="s-reason">Start the system</div></div>
+      <div id="done-row" class="row" style="margin-top:12px; display:none">
+        <span style="flex:1; font-size:16px">✅ Routine finished.</span>
+        <button class="big go" style="flex:0 0 auto" onclick="post({action:'restart_routine'})">↻ Run again</button>
+      </div>
       <div class="row" style="margin-top:12px">
         <button class="big go" id="b-auto" onclick="startRoutine()">Start routine<span class="key">A</span></button>
         <button class="big warn" onclick="key('p')">Pause<span class="key">P / space</span></button>
@@ -138,6 +152,24 @@
         <span class="k">Mode</span><span id="m-text">–</span>
       </div>
       <div id="hands" style="margin-top:12px">Hands: –</div>
+    </section>
+    <section>
+      <h2>Robot view (3D)</h2>
+      <div class="row sim-only" style="margin-bottom:8px">
+        <label><input type="checkbox" id="vh"> Virtual hands (simulated): drag them onto the PCB</label>
+        <span style="flex:1"></span>
+        <button onclick="handsHome()">Hands away</button>
+      </div>
+      <div class="row" style="margin-bottom:8px">
+        <span class="muted">View:</span>
+        <button onclick="setView('operator')">Operator</button>
+        <button onclick="setView('side')">Side</button>
+        <button onclick="setView('top')">Top</button>
+        <button onclick="setView('robot')">Behind the robot</button>
+      </div>
+      <canvas id="view"></canvas>
+      <div class="muted" style="margin-top:6px">Drag the background to turn the view, the wheel to zoom. The arm moves
+        with the real or simulated controller; the points turn green when they are done.</div>
     </section>
     <section>
       <h2>Log · <span id="log-title">events</span></h2>
@@ -168,6 +200,7 @@ async function api(path, body) {
   const opt = {headers: {"X-Token": TOKEN}};
   if (body) { opt.method = "POST"; opt.body = JSON.stringify(body); opt.headers["Content-Type"] = "application/json"; }
   const r = await fetch(path, opt);
+  if (r.status === 403) { location.reload(); return {}; }    // the panel was restarted: new token
   return r.json();
 }
 async function post(body) {
@@ -192,7 +225,18 @@ function startRoutine() {
   key(runKey);
 }
 function manual(k) { runKey = k; key(k); }
-function resume() { key(runKey); }
+function fullSim() {
+  if (confirm("Start the full simulation? The fake arm, the laptop's camera and microphone, the operator screen and\n" +
+              "the robot's voice (it speaks through your speakers). Hands: drag the virtual L and R hands in the 3D view.\n\n" +
+              "Then: Calibrate operator, and answer the robot \"yes\" (or press Start routine).")) {
+    post({action: "full_simulation"});
+  }
+}
+function resume() {
+  // Automatic needs face or voice running; without them, resume in manual (normal, or slower if that was chosen)
+  const perception = status && (status.processes.face.running || status.processes.voice.running);
+  key(perception ? runKey : (runKey === "c" ? "c" : "n"));
+}
 function restartRoutine() {
   if (confirm("Restart the routine? The robot pauses, goes back to the start and waits for Start routine.")) post({action: "restart_routine"});
 }
@@ -242,10 +286,20 @@ function setDot(id, cls, text, textId) {
 function render(s) {
   status = s;
   document.getElementById("busy").textContent = s.busy ? "⏳ " + s.busy + "…" : "";
+  document.body.classList.toggle("sim", !!s.settings.simulated);
+  document.body.classList.toggle("real", !s.settings.simulated);
   document.getElementById("b-start").disabled = !!s.busy;
+  document.getElementById("b-fullsim").disabled = !!s.busy;
+  const rob = s.summary && s.summary.robot;
+  document.getElementById("done-row").style.display = rob && rob.done ? "flex" : "none";
   const seg = (id, v) => document.querySelectorAll("#" + id + " button").forEach(b => b.classList.toggle("on", b.dataset.v === String(v)));
   seg("seg-sim", s.settings.simulated); seg("seg-routine", s.settings.routine); seg("seg-speed", s.settings.speed);
   document.querySelectorAll("input[data-m]").forEach(c => c.checked = !!s.settings.modules[c.dataset.m]);
+  const vh = document.getElementById("vh");
+  vh.checked = !!(s.virtual && s.virtual.enabled); vh.disabled = !s.settings.simulated;
+  if (s.virtual && (!hands || !drag)) hands = s.virtual.hands.map(h => h.slice());
+  document.getElementById("sim-note").textContent = s.settings.simulated ?
+    (s.sim_devices && s.sim_devices[0] !== "0" ? "(webcam " + s.sim_devices[0] + " and its mic)" : "(laptop camera and mic)") : "";
 
   // Checks
   const n = s.network || {};
@@ -267,6 +321,9 @@ function render(s) {
     box.style.background = "var(--gray)";
     document.getElementById("s-title").textContent = s.processes.supervisor.running ? "WAITING" : "NOT CONNECTED";
     document.getElementById("s-reason").textContent = s.processes.supervisor.running ? "waiting for the supervisor" : "Start the system";
+    for (const id of ["r-text", "f-text", "v-text", "m-text"]) document.getElementById(id).textContent = "–";
+    document.getElementById("r-bar").style.width = "0"; document.getElementById("t-bar").style.width = "0";
+    document.getElementById("hands").className = ""; document.getElementById("hands").textContent = "Hands: –";
   } else {
     box.style.background = COLORS[sum.state] || "var(--gray)";
     document.getElementById("s-title").textContent = TITLES[sum.state] || sum.state;
@@ -321,6 +378,187 @@ async function refresh() {
     document.getElementById("busy").textContent = "⚠ the panel server is not running";
   }
 }
+// ---------- 3D view ----------
+const canvas = document.getElementById("view"), ctx = canvas.getContext("2d");
+// Orbit camera above the table: yaw 0 = standing on the operator's side (+x) looking at the robot
+const VIEWS = {operator: {yaw: 0.45, pitch: 0.55}, side: {yaw: -1.57, pitch: 0.35}, top: {yaw: 0.0, pitch: 1.5},
+               robot: {yaw: 3.0, pitch: 0.6}};
+let scene = null, cam = {yaw: 0.45, pitch: 0.55, dist: 2.6, zoom: 2.0, target: [0.3, 0, 0.3]};
+let qShown = null, trail = [], hands = null, drag = null, lastSent = 0, live = null, tFrame = performance.now();
+// The arm follows its own fast feed (10 Hz) and is eased between updates, so it moves smoothly
+setInterval(async () => { try { live = await api("/api/live"); } catch (e) { live = null; } }, 100);
+const DEFAULT_CAM = JSON.stringify(cam);
+if (VIEWS[location.hash.slice(1)]) Object.assign(cam, VIEWS[location.hash.slice(1)]);     // e.g. #side
+const REST = [[0.78, -0.16], [0.78, 0.16]];
+api("/api/scene").then(s => { scene = s; });
+
+function mat(a, d, al, th) {               // modified DH, as pcb_plan._dh
+  const ca = Math.cos(al), sa = Math.sin(al), ct = Math.cos(th), st = Math.sin(th);
+  return [[ct, -st, 0, a], [st * ca, ct * ca, -sa, -d * sa], [st * sa, ct * sa, ca, d * ca], [0, 0, 0, 1]];
+}
+function mul(A, B) {
+  const C = [[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]];
+  for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) for (let k = 0; k < 4; k++) C[i][j] += A[i][k] * B[k][j];
+  return C;
+}
+function chain(q) {                        // origins of base, joints, flange, TCP and pen tip
+  let T = [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]];
+  const pts = [[0, 0, 0]];
+  scene.dh.forEach((p, i) => { T = mul(T, mat(p[0], p[1], p[2], q[i])); pts.push([T[0][3], T[1][3], T[2][3]]); });
+  for (const d of [scene.flange, scene.tcp, scene.pen]) { T = mul(T, mat(0, d, 0, 0)); pts.push([T[0][3], T[1][3], T[2][3]]); }
+  return pts;
+}
+const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+const unit = a => { const n = Math.hypot(...a); return a.map(x => x / n); };
+function basis() {                         // camera position C, forward F, right R, up U (z is up)
+  const cp = Math.cos(cam.pitch), sp = Math.sin(cam.pitch);
+  const back = [cp * Math.cos(cam.yaw), cp * Math.sin(cam.yaw), sp];
+  const C = cam.target.map((t, i) => t + cam.dist * back[i]);
+  const F = back.map(x => -x), R = unit(cross(F, [0, 0, 1])), U = cross(R, F);
+  return {C, F, R, U};
+}
+function focal() { return canvas.height * cam.zoom; }
+function project(p) {
+  const B = basis(), r = p.map((x, i) => x - B.C[i]);
+  const s = focal() / Math.max(0.05, dot(r, B.F));
+  return [canvas.width / 2 + dot(r, B.R) * s, canvas.height / 2 - dot(r, B.U) * s, s];
+}
+function toTable(x, y, z) {                // pixel -> point on the horizontal plane at height z
+  const B = basis(), f = focal();
+  const dir = [0, 1, 2].map(i => B.F[i] + (x - canvas.width / 2) / f * B.R[i] - (y - canvas.height / 2) / f * B.U[i]);
+  if (Math.abs(dir[2]) < 1e-6) return null;
+  const t = (z - B.C[2]) / dir[2];
+  return t > 0 ? [B.C[0] + t * dir[0], B.C[1] + t * dir[1]] : null;
+}
+function label(p, text, color) {
+  const s = project(p);
+  ctx.fillStyle = color; ctx.font = (12 * devicePixelRatio) + "px system-ui"; ctx.textAlign = "center";
+  ctx.fillText(text, s[0], s[1]);
+}
+function poly(points, fill, stroke, width) {
+  ctx.beginPath();
+  points.forEach((p, i) => { const s = project(p); i ? ctx.lineTo(s[0], s[1]) : ctx.moveTo(s[0], s[1]); });
+  ctx.closePath();
+  if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+  if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = width || 1; ctx.stroke(); }
+}
+function circle(c, r, z, n) { const out = []; for (let i = 0; i < (n || 24); i++) { const a = 2 * Math.PI * i / (n || 24); out.push([c[0] + r * Math.cos(a), c[1] + r * Math.sin(a), z]); } return out; }
+function pcbZ() { return scene.corners.length ? scene.corners.reduce((a, c) => a + c[2], 0) / 4 : 0.03; }
+
+function draw() {
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  if (canvas.width !== w * devicePixelRatio) { canvas.width = w * devicePixelRatio; canvas.height = h * devicePixelRatio; }
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  if (!scene) return;
+  ctx.lineCap = "round";
+  // Floor grid (robot base frame, 10 cm), the robot's base, axes and which side is which
+  for (let i = -3; i <= 10; i++) poly([[i / 10, -0.5, 0], [i / 10, 0.5, 0]], null, "#26282e");
+  for (let i = -5; i <= 5; i++) poly([[-0.3, i / 10, 0], [1.0, i / 10, 0]], null, "#26282e");
+  [[[0.2, 0, 0], "#e05252", "x"], [[0, 0.2, 0], "#52c05a", "y"]].forEach(([e, c, t]) => {
+    poly([[0, 0, 0], e], null, c, 2.5 * devicePixelRatio);
+    label(e.map(x => x * 1.15), t, c);
+  });
+  poly(circle([0, 0], 0.09, 0), "#2f3239", "#555", 1);
+  label([-0.22, 0, 0], "robot", "#7d8089");
+  label([0.92, 0, 0], "operator", "#7d8089");
+  // Table markers and PCB
+  const sd = (scene.aruco_side || 0.048) / 2;
+  if (scene.arucos.length) poly(scene.arucos.map(a => [a[0], a[1], 0]), "rgba(255,255,255,0.05)", "#3a3d45");
+  scene.arucos.forEach(a => poly([[a[0] - sd, a[1] - sd, 0], [a[0] + sd, a[1] - sd, 0], [a[0] + sd, a[1] + sd, 0], [a[0] - sd, a[1] + sd, 0]], "#d8d8d8", "#000"));
+  const z = pcbZ();
+
+  if (scene.corners.length) poly(scene.corners, "#2d5a3a", "#5fa874", 2);
+  // Soldering points: green when done
+  const sum = live && live.summary, r = sum && sum.robot;
+  const now = performance.now(), dt = Math.min(0.2, (now - tFrame) / 1000); tFrame = now;
+  scene.points.forEach(p => poly(circle(p, scene.point_r || 0.03, p[2]), "rgba(200,50,50,0.12)", "rgba(220,70,70,0.7)", 1.5));
+  scene.points.forEach((p, k) => {
+    const s = project(p), done = r && r.n_segments && (r.done || r.seg_index >= 3 * (k + 1));
+    ctx.fillStyle = done ? "#3fd36a" : "#c9cbd1";
+    ctx.beginPath(); ctx.arc(s[0], s[1], 5 * devicePixelRatio, 0, 7); ctx.fill();
+  });
+  // Virtual hands
+  if (live && live.virtual && live.virtual.enabled && hands) {
+    hands.forEach((hd, i) => {
+      const near = live.virtual.near[i];
+      poly(circle(hd, scene.hand_r || 0.04, z + 0.01), near ? "rgba(220,60,60,0.9)" : "rgba(240,200,160,0.95)", "#fff", 2);
+      const c = project([hd[0], hd[1], z + 0.01]);
+      ctx.fillStyle = "#111"; ctx.font = "bold " + (14 * devicePixelRatio) + "px system-ui"; ctx.textAlign = "center";
+      ctx.fillText(i ? "R" : "L", c[0], c[1] + 5 * devicePixelRatio);
+      if (!near) label([hd[0] + 0.07, hd[1], z + 0.01], "drag me", "#f0c8a0");
+    });
+  }
+  // Arm
+  const q = r && r.q && r.q.length === 7 ? r.q : null;
+  if (q) {
+    const a = 1 - Math.exp(-dt / 0.09);                                   // ease toward the last update
+    qShown = qShown ? qShown.map((x, i) => x + a * (q[i] - x)) : q.slice();
+    const pts = chain(qShown), tip = pts[pts.length - 1];
+    if (!trail.length || Math.hypot(...tip.map((x, i) => x - trail[trail.length - 1][i])) > 0.003) trail.push(tip);
+    if (trail.length > 400) trail.shift();
+    ctx.beginPath(); trail.forEach((p, i) => { const s = project(p); i ? ctx.lineTo(s[0], s[1]) : ctx.moveTo(s[0], s[1]); });
+    ctx.strokeStyle = "rgba(90,160,255,0.45)"; ctx.lineWidth = 1.5 * devicePixelRatio; ctx.stroke();
+    // Shadow on the floor
+    ctx.beginPath(); pts.forEach((p, i) => { const s = project([p[0], p[1], 0]); i ? ctx.lineTo(s[0], s[1]) : ctx.moveTo(s[0], s[1]); });
+    ctx.strokeStyle = "rgba(0,0,0,0.45)"; ctx.lineWidth = 10 * devicePixelRatio; ctx.stroke();
+    const color = {NORMAL: "#e9eaee", CAUTIOUS: "#f2c14e", PAUSED: "#e57373", RETRACT: "#6fa8ff"}[sum.state] || "#d0d2d8";
+    for (let i = 0; i < pts.length - 1; i++) {
+      const a = project(pts[i]), b = project(pts[i + 1]);
+      const tool = i >= pts.length - 3;
+      ctx.strokeStyle = tool ? (i === pts.length - 2 ? "#ffcf4a" : "#9aa0aa") : color;
+      ctx.lineWidth = (tool ? 0.012 : 0.05) * a[2];
+      ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke();
+    }
+    pts.slice(0, 9).forEach(p => { const s = project(p); ctx.fillStyle = "#3b3e46"; ctx.beginPath(); ctx.arc(s[0], s[1], 0.022 * s[2], 0, 7); ctx.fill(); });
+  } else {
+    ctx.fillStyle = "#9a9ca3"; ctx.font = (15 * devicePixelRatio) + "px system-ui"; ctx.textAlign = "center";
+    ctx.fillText("Start the system to see the arm", canvas.width / 2, canvas.height / 2);
+  }
+  if (status && status.settings.simulated && !(live && live.virtual && live.virtual.enabled)) {
+    ctx.fillStyle = "#f0c8a0"; ctx.font = (14 * devicePixelRatio) + "px system-ui"; ctx.textAlign = "left";
+    ctx.fillText("Virtual hands are off: tick \"Virtual hands\" above to drag them", 14 * devicePixelRatio, 24 * devicePixelRatio);
+  }
+}
+(function loop() { draw(); requestAnimationFrame(loop); })();
+
+function sendHands(force) {
+  const now = Date.now();
+  if (force || now - lastSent > 80) { lastSent = now; post({action: "virtual_hands", hands}); }
+}
+canvas.addEventListener("pointerdown", e => {
+  const x = e.offsetX * devicePixelRatio, y = e.offsetY * devicePixelRatio;
+  drag = {x: e.clientX, y: e.clientY, hand: -1};
+  if (status && status.virtual.enabled && hands && scene) {
+    hands.forEach((hd, i) => {
+      const s = project([hd[0], hd[1], pcbZ()]);
+      if (Math.hypot(s[0] - x, s[1] - y) < 28 * devicePixelRatio) drag.hand = i;
+    });
+  }
+  canvas.setPointerCapture(e.pointerId); canvas.classList.add("dragging");
+});
+canvas.addEventListener("pointermove", e => {
+  if (!drag) return;
+  if (drag.hand >= 0) {
+    const p = toTable(e.offsetX * devicePixelRatio, e.offsetY * devicePixelRatio, pcbZ());
+    if (p) { hands[drag.hand] = [Math.max(0.15, Math.min(1.0, p[0])), Math.max(-0.6, Math.min(0.6, p[1]))]; sendHands(); }
+  } else {
+    cam.yaw -= (e.clientX - drag.x) * 0.008;
+    cam.pitch = Math.max(0.08, Math.min(1.5, cam.pitch + (e.clientY - drag.y) * 0.006));
+    drag.x = e.clientX; drag.y = e.clientY;
+  }
+});
+canvas.addEventListener("pointerup", () => { if (drag && drag.hand >= 0) sendHands(true); drag = null; canvas.classList.remove("dragging"); });
+canvas.addEventListener("wheel", e => { e.preventDefault(); cam.zoom = Math.max(0.8, Math.min(8, cam.zoom * (e.deltaY > 0 ? 0.9 : 1.1))); }, {passive: false});
+function resetView() { cam = JSON.parse(DEFAULT_CAM); }
+function setView(name) { cam = Object.assign(JSON.parse(DEFAULT_CAM), VIEWS[name]); }
+function handsHome() { hands = REST.map(h => h.slice()); sendHands(true); }
+document.getElementById("vh").onchange = e => {
+  if (e.target.checked && !hands) hands = REST.map(h => h.slice());
+  post({action: "virtual_hands", enabled: e.target.checked, hands: hands || REST});
+};
+
 setInterval(refresh, 600);
 setInterval(refreshLog, 1000);
 refresh(); refreshLog();

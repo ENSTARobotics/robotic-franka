@@ -10,7 +10,8 @@ Voice orders from dialogue.py (UDP 5013): start = a; pause = p; slow = CAUTIOUS 
 resume = automatic from CAUTIOUS 20 s. While the robot speaks, the voice emotion is ignored.
 Hands (perception/hands.py, UDP 5016): if there are hands next to the PCB when the robot was about
 to move, RETRACT (stops and goes up 5 cm) and it stays like that, in any mode, until the zone is
-clear AND the operator says "continue" (or presses a, n or c). Without hands.py open nothing is watched.
+clear AND the operator says "continue" (or presses a, n or c). Then it goes on slowly (CAUTIOUS) for
+HANDS_SLOW_S s before it can return to normal speed. Without hands.py open nothing is watched.
 Keys (in its terminal, or {"key": "a"} over UDP 5017 from panel/panel.py):
        k = calibrate the operator's baseline (robot paused; voice orders are ignored)
        a = AUTOMATIC (T(t) decides the state)
@@ -43,6 +44,7 @@ HANDS_PORT = 5016           # perception/hands.py
 CONTROL_PORT = 5017         # keys from the control panel (panel/panel.py)
 GUI_PORT = 5018             # summary for the control panel
 HANDS_MAX_AGE = 0.5         # s: an older hands message does not count
+HANDS_SLOW_S = 10.0         # s at CAUTIOUS after a hands stop, before normal speed again
 PANEL_HZ = 10.0
 ECHO_MARGIN = 0.5           # s after the robot speaks in which the voice emotion is ignored
 CALIBRATION_S = 20.0        # s the calibration with the k key lasts
@@ -117,6 +119,7 @@ def main():
     mute_audio_until = 0.0
     hands, t_hands = {}, None
     hands_lock = False          # hands next to the PCB: RETRACT until the zone is clear + "continue"
+    slow_until = 0.0            # after a hands stop: at most CAUTIOUS until this time
 
     trust, fsm = Trust(), StateMachine()
     mode, manual = "MANUAL", "PAUSED"
@@ -154,12 +157,12 @@ def main():
 
             def release_hands(origin):
                 """"continue" (or a/n/c) with the zone clear removes the lock; with hands still there, it does not."""
-                nonlocal hands_lock
+                nonlocal hands_lock, slow_until
                 if hands_near:
                     line("[hands] %s ignored: there are still hands next to the PCB" % origin)
                     return False
-                hands_lock = False
-                line("[hands] zone clear and %s: resuming" % origin)
+                hands_lock, slow_until = False, t_tick + HANDS_SLOW_S
+                line("[hands] zone clear and %s: resuming slowly for %.0f s" % (origin, HANDS_SLOW_S))
                 return True
 
             # Keyboard and control panel
@@ -242,6 +245,9 @@ def main():
                                             color(fsm.state), fsm.reason))
 
             state = fsm.state if mode == "AUTO" else manual
+            slowed = state == "NORMAL" and t_tick < slow_until       # just back from a hands stop
+            if slowed:
+                state = "CAUTIOUS"
             # Hands: they only lock if the robot was about to move (before starting, the operator places the PCB).
             # If it was already paused, the lock comes as soon as something tries to resume with the hands there
             if hands_near and not hands_lock and state in ("NORMAL", "CAUTIOUS"):
@@ -251,11 +257,13 @@ def main():
                 state = "RETRACT"
             cause = ("calibrating" if t_calibration_end is not None else
                      ("hands" if hands_near else "hands_clear") if hands_lock else
-                     fsm.cause if mode == "AUTO" else "manual")
+                     "after_hands" if slowed else fsm.cause if mode == "AUTO" else "manual")
             cmd = {"t": time.time(), "enabled": state != "PAUSED", "speed_scale": speed[state],
                    "retract": state == "RETRACT", "state": "PAUSED" if state == "RETRACT" else state,
                    "trust": None if T is None else round(T, 3),
-                   "reason": "hands next to the PCB" if hands_lock else fsm.reason if mode == "AUTO" else "manual"}
+                   "reason": "hands next to the PCB" if hands_lock else
+                             "slowly for a moment after the hands stop" if slowed else
+                             fsm.reason if mode == "AUTO" else "manual"}
             sock_cmd.sendto(json.dumps(cmd).encode("utf-8"), (IP, CMD_PORT))
 
             # Robot's state
@@ -282,7 +290,8 @@ def main():
                          "robot": {"connected": age is not None and age <= ROBOT_TIMEOUT,
                                    "segment": robot.get("segment", ""), "action": robot.get("action", ""),
                                    "seg_index": robot.get("seg_index", 0), "n_segments": robot.get("n_segments", 0),
-                                   "done": robot.get("done", False)}}
+                                   "done": robot.get("done", False),
+                                   "q": robot.get("q") or [], "state": robot.get("state", "")}}
                 for port in (PANEL_PORT, DIALOGUE_PORT, GUI_PORT):
                     sock_cmd.sendto(json.dumps(panel).encode("utf-8"), (IP, port))
 

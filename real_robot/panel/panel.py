@@ -18,6 +18,7 @@ web pages cannot drive the robot. The emergency stop is still the main stop.
 """
 import argparse
 import collections
+import glob
 import json
 import os
 import re
@@ -32,6 +33,9 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, "robot"))
+import pcb_plan
+
 PANEL_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(PANEL_DIR, os.pardir))           # real_robot/
 PY = os.path.join(ROOT, ".venv", "bin", "python")
@@ -42,12 +46,40 @@ ROBOT_IP = "147.250.35.11"
 IP = "127.0.0.1"
 PORT = 8765
 CONTROL_PORT = 5017         # keys for supervisor.py
+HANDS_PORT = 5016           # hands messages for supervisor.py (virtual hands, simulated only)
+VIRTUAL_HAND_R = 0.04       # m, radius of a virtual hand on the table
+VIRTUAL_POINT_R = 0.03      # m around each soldering point, like hands.py --point-radius-cm 3
 GUI_PORT = 5018             # supervisor.py's summary
 LOG_LINES = 400
 STACK_TIMEOUT = 60.0        # s to wait for "stack ready"
 ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
 MODULES = ["face", "voice", "hands", "screen", "dialogue"]
+SIM_WEBCAM = "C920"          # simulated: this webcam (camera and microphone) if it is plugged in, else the laptop's
+
+
+def sim_devices():
+    """(camera, microphone) for the simulation: the C920 if connected, otherwise the laptop's own."""
+    camera, mic = "0", "system"
+    for path in glob.glob("/sys/class/video4linux/video*"):
+        try:
+            with open(os.path.join(path, "name")) as f_name, open(os.path.join(path, "index")) as f_index:
+                if SIM_WEBCAM in f_name.read() and f_index.read().strip() == "0":
+                    camera = SIM_WEBCAM
+        except OSError:
+            pass
+    r = subprocess.run(["pactl", "list", "short", "sources"], capture_output=True, text=True)
+    if SIM_WEBCAM in r.stdout:
+        mic = SIM_WEBCAM
+    return camera, mic
+
+
+def sim_args(name):
+    """Simulated: a camera can only be opened by one program, so face.py lends its images to hands.py, which
+    watches the whole image (there are no table markers)."""
+    camera, mic = sim_devices()
+    return {"face": ["--camera", camera, "--share-frames"], "voice": ["--device", mic],
+            "hands": ["--frames-from-face", "--no-markers"], "dialogue": ["--device", mic]}.get(name, [])
 TITLES = {"stack": "frankapy stack", "controller": "Controller", "supervisor": "Supervisor", "face": "Face",
           "voice": "Voice", "hands": "Hands + PCB", "screen": "Operator screen", "dialogue": "Dialogue",
           "comm_test": "Communication test", "pcb_plan": "PCB plan check"}
@@ -170,6 +202,10 @@ class Panel(object):
         self.busy = ""              # what the panel is doing right now (start-up, stop...)
         self.events = collections.deque(maxlen=200)
         self.lock = threading.Lock()
+        # Virtual hands (simulated): two points on the table that the page drags; at rest by the operator's side
+        self.virtual = {"enabled": False, "hands": [[0.78, -0.16], [0.78, 0.16]], "near": [False, False]}
+        self.virtual_points = None
+        threading.Thread(target=self._send_virtual_hands, daemon=True).start()
         threading.Thread(target=self._listen_summary, daemon=True).start()
         threading.Thread(target=self._watch, daemon=True).start()
 
@@ -223,6 +259,35 @@ class Panel(object):
     def event(self, text):
         self.events.append(time.strftime("%H:%M:%S ") + text)
 
+    def _send_virtual_hands(self):
+        """While enabled, plays the role of hands.py: a hand counts as near when it touches the PCB plus margin."""
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        while True:
+            time.sleep(0.1)
+            if not self.virtual["enabled"]:
+                continue
+            if self.virtual_points is None:
+                self.virtual_points = scene()["points"]
+            # The operator holds the PCB: only a hand reaching a soldering point counts, not one on the edges
+            near = [any(((h[0] - p[0]) ** 2 + (h[1] - p[1]) ** 2) ** 0.5 < VIRTUAL_POINT_R + VIRTUAL_HAND_R
+                        for p in self.virtual_points) for h in self.virtual["hands"]]
+            self.virtual["near"] = near
+            sock.sendto(json.dumps({"t": time.time(), "near": any(near), "hands": sum(near),
+                                    "confidence": 1.0, "virtual": True}).encode("utf-8"), (IP, HANDS_PORT))
+
+    def set_virtual_hands(self, enabled=None, hands=None):
+        if enabled is not None:
+            if enabled and not self.settings["simulated"]:
+                return "virtual hands only work in simulated mode"
+            if enabled and self.processes["hands"].running():
+                self.processes["hands"].interrupt()     # two senders on 5016 would contradict each other
+                self.event("Hands program stopped: the virtual hands replace it")
+            self.virtual["enabled"] = bool(enabled)
+            self.event("virtual hands " + ("on: drag them in the 3D view" if enabled else "off"))
+        if hands is not None:
+            self.virtual["hands"] = [[float(h[0]), float(h[1])] for h in hands[:2]]
+        return "ok"
+
     # ---------- commands ----------
 
     def scale(self):
@@ -240,9 +305,13 @@ class Panel(object):
                               % (ROS_SETUP, CONTAINER_PATH, routine, max_scale)))
 
     def start_module(self, name):
+        if name == "hands" and self.virtual["enabled"]:
+            self.event("Hands program not started: the virtual hands are on")
+            return False
         script = {"face": "perception/face.py", "voice": "perception/voice.py", "hands": "perception/hands.py",
                   "screen": "screen/screen.py", "dialogue": "dialogue/dialogue.py"}[name]
-        return self.processes[name].start([PY, script])
+        extra = sim_args(name) if self.settings["simulated"] else []
+        return self.processes[name].start([PY, script] + extra)
 
     def start_supervisor(self):
         _, v_normal, v_cautious = self.scale()
@@ -258,6 +327,21 @@ class Panel(object):
         """Runs a short command in the container (to stop the programs started with docker exec)."""
         subprocess.run(docker("exec", CONTAINER, "bash", "-c", script), stdout=subprocess.DEVNULL,
                        stderr=subprocess.DEVNULL, timeout=60)
+
+    def full_simulation(self):
+        """Everything as in the real test, with the fake arm and the laptop's camera and microphone. The hands are
+        the virtual ones dragged in the 3D view: the laptop camera sees too little of the table, and hand detection
+        on it gave many false alarms."""
+        if self.busy:
+            return "busy: " + self.busy
+        if any(self.processes[n].running() for n in ["controller", "supervisor"] + MODULES):
+            return "something is already running: press Stop all first"
+        self.settings["simulated"] = True
+        self.settings["modules"] = {m: m != "hands" for m in MODULES}
+        self.virtual["enabled"] = True
+        self.virtual["hands"] = [[0.78, -0.16], [0.78, 0.16]]
+        self.event("full simulation: fake arm + face, voice, screen and speech; drag the virtual hands in the 3D view")
+        return self.start_system()
 
     def start_system(self):
         """Stack -> controller -> supervisor -> perception, screen and dialogue."""
@@ -307,7 +391,8 @@ class Panel(object):
             if self.settings["modules"].get("dialogue"):
                 time.sleep(3.0)         # let the voice measure the background noise before the robot greets
                 self.start_module("dialogue")
-            self.event("system ready: the robot waits PAUSED. Calibrate (k) and start the routine.")
+            self.event("system ready: the robot waits PAUSED. Calibrate (k), then answer the robot \"yes\" "
+                       "or press Start routine.")
         finally:
             self.busy = ""
 
@@ -413,7 +498,28 @@ class Panel(object):
                           for n, p in self.processes.items()},
             "settings": self.settings, "summary": summary, "network": self.network, "docker": self.docker,
             "busy": self.busy, "events": list(self.events)[-12:], "has_venv": os.path.exists(PY),
+            "virtual": self.virtual, "sim_devices": sim_devices() if self.settings["simulated"] else None,
         }
+
+
+def scene():
+    """What the 3D view draws besides the arm: table markers, PCB corners and soldering points (robot frame, m)."""
+    out = {"dh": pcb_plan.DH, "flange": 0.107, "tcp": pcb_plan.TCP_FRANKAPY, "pen": 0.0,
+           "arucos": [], "table_z": 0.0, "corners": [], "points": []}
+    try:
+        with open(os.path.join(pcb_plan.DATA_DIR, "table.json")) as f:
+            table = json.load(f)
+        out["arucos"] = [table["arucos"][k] for k in table.get("contour_order", sorted(table["arucos"]))]
+        out["table_z"], out["aruco_side"] = table.get("table_z", 0.0), table.get("aruco_side_m", 0.048)
+        _, info = pcb_plan.load()
+        E = [info["corner_%d" % i]["tip_xyz"] for i in range(1, 5)]
+        out["corners"], out["pen"] = E, info["corner_1"]["pen_length_cm"] / 100.0
+        out["points"] = pcb_plan.grid_points(E, 2, 3, pcb_plan.MARGIN)
+        out["point_r"] = VIRTUAL_POINT_R
+        out["hand_r"] = VIRTUAL_HAND_R
+    except (IOError, KeyError, ValueError) as e:
+        out["error"] = str(e)
+    return out
 
 
 def make_handler(panel, token):
@@ -447,6 +553,11 @@ def make_handler(panel, token):
                 return self._send(403, {"error": "bad token"})
             if url.path == "/api/status":
                 return self._send(200, panel.status())
+            if url.path == "/api/scene":
+                return self._send(200, scene())
+            if url.path == "/api/live":           # small and frequent: the 3D view polls it at 10 Hz
+                fresh = panel.summary if panel.summary and time.time() - panel.t_summary <= 1.5 else None
+                return self._send(200, {"summary": fresh, "virtual": panel.virtual})
             if url.path == "/api/log":
                 name = parse_qs(url.query).get("name", [""])[0]
                 if name == "events":
@@ -468,9 +579,13 @@ def make_handler(panel, token):
                 for k in ("simulated", "routine", "speed"):
                     if k in body:
                         panel.settings[k] = body[k]
+                if not panel.settings["simulated"]:
+                    panel.virtual["enabled"] = False    # never fake hands next to the real robot
                 for k, v in (body.get("modules") or {}).items():
                     if k in MODULES:
                         panel.settings["modules"][k] = bool(v)
+            elif action == "full_simulation":
+                result = panel.full_simulation()
             elif action == "start_system":
                 result = panel.start_system()
             elif action == "stop_all":
@@ -490,6 +605,8 @@ def make_handler(panel, token):
                     panel.start_module(name)
                 else:
                     panel.processes[name].interrupt()
+            elif action == "virtual_hands":
+                result = panel.set_virtual_hands(body.get("enabled"), body.get("hands"))
             elif action == "comm_test":
                 result = panel.comm_test()
             elif action == "pcb_plan":

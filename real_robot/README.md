@@ -66,15 +66,26 @@ Then open **Aided Building** from the app menu (Super key), or run `panel/open_p
 window served by `panel/panel.py` on `127.0.0.1:8765` (standard library only).
 
 1. **Setup:** real robot or simulated, PCB points or pose cycle, slow (0.3) or normal (0.6) speed, and which
-   programs to run (face, voice, hands + PCB check, operator screen, robot speech). The checks show the link
+   programs to run (face, voice, hands + PCB check, operator screen, robot speech). In simulated mode they use the
+   laptop's camera and microphone (see [Without the robot](#without-the-robot)). The checks show the link
    speed and ping to the robot, the Docker container and the frankapy stack.
-2. **Start system:** starts the container and the stack, waits for `stack ready`, then the controller, the
+2. **▶ Run full simulation:** everything as in the real test (face, voice, operator screen and the robot's voice)
+   with the fake arm and the C920 webcam and its microphone (or the laptop's own if the C920 is not plugged in). The
+   hands are the virtual ones, dragged in the 3D view: a webcam on the laptop sees too little of the table and gave
+   many false hand alarms. Calibrate, answer the robot *yes*, and when the
+   routine ends press **↻ Run again**.
+   **Start system:** the same with your own choices from Setup; for the real robot it starts the container and the stack, waits for `stack ready`, then the controller, the
    supervisor and the chosen programs. The robot waits PAUSED.
 3. **Routine:** *Calibrate operator* (k), *Start routine* (automatic; manual normal if face and voice are off),
    *Pause* (space), *Continue* (also after hands near the PCB), *Manual: normal / slower*, *Move away* (r) and
    *Restart routine* (the controller starts again from home). The state, trust, face, voice, hands and robot
    progress update live, and each program's log is one click away.
-4. **Stop all** (the supervisor first, so it sends PAUSED), or *Stop all and close*.
+4. **Robot view (3D):** the arm drawn from its joint angles (real or simulated), with the table markers, the PCB,
+   its watched zone, the soldering points (green when done) and the x/y axes. Drag to turn, wheel to zoom, or
+   pick a view: operator, side, top or behind the robot. In simulated mode,
+   **virtual hands** replace the Hands program: drag the L and R hands onto the PCB and the fake arm stops and moves
+   away, exactly as with real hands; move them off and press *Continue*. They never run with the real robot.
+5. **Stop all** (the supervisor first, so it sends PAUSED), or *Stop all and close*.
 
 Tools: *Communication test* (turns the wrist 20°), *Check PCB plan* and *Open Desk*. Before starting the real
 robot, Desk still needs joints unlocked and FCI active, and someone holds the emergency stop. Without the docker
@@ -217,6 +228,9 @@ an additional channel: the emergency stop remains the main one.**
 | 5014 | supervisor | dialogue |
 | 5015 | PCB check | dialogue |
 | 5016 | hand check | supervisor |
+| 5017 | control panel (keys) | supervisor |
+| 5018 | supervisor | control panel |
+| 5019 | face.py camera images (`--share-frames`) | hands.py (`--frames-from-face`) |
 
 ## PCB check (`pcb.py`, optional)
 
@@ -237,9 +251,9 @@ routine it does not check, because the arm itself covers the PCB.
 ## Hands near the PCB (`hands.py`)
 
 The table camera (the C930e, which also sees the ArUco markers) runs a YOLOv8n hand detector
-(`perception/models/hands_yolov8n.pt`, from the team's YOLO_hands; see `HANDS_YOLO.txt`). The markers place the
-recorded PCB corners in the image, and the watched zone is the PCB plus a margin (5 cm, `--margin-cm`). A hand
-counts when its box touches that zone. It is "near" with hands in 2 of the last 3 images (10 Hz) and clears after
+(`perception/models/hands_yolov8n.pt`, from the team's YOLO_hands; see `HANDS_YOLO.txt`). The operator holds the
+PCB, so hands on its edges are fine: the watched zone is a circle of 3 cm (`--point-radius-cm`) around each
+soldering point, placed in the image through the markers. A hand counts when its box touches one of those circles. It is "near" with hands in 2 of the last 3 images (10 Hz) and clears after
 1 s without them.
 
 ```bash
@@ -256,7 +270,8 @@ What happens, in automatic and in manual mode:
    pausing and moving away."
 2. It stays there while there are hands, and also after they leave: "Thank you, the area is clear. Say continue
    when you are ready."
-3. *Continue* (or *yes*, *ready*) resumes slowly (CAUTIOUS for 20 s), like after a *stop*. With hands still there
+3. *Continue* (or *yes*, *ready*) resumes slowly: at most CAUTIOUS for 10 s, then normal speed again ("Back to
+   normal speed."); by voice in automatic mode, CAUTIOUS for 20 s like after a *stop*. With hands still there
    it answers "Please move your hands away from the board first." and does not move. In the Supervisor tab,
    `a`, `n` or `c` also resume, with the same check.
 
@@ -264,10 +279,19 @@ Before the routine starts (robot paused), hands do not trigger anything: the ope
 robot is paused for another reason, the block starts as soon as something tries to resume with hands there.
 Without `hands.py` running nothing is watched, and the screen and the supervisor show "hands --". The detector
 is trained on generic photos of hands: check it with `--show` on the lab table before trusting it, and adjust
-`--conf` (0.4) or `--margin-cm` if the gripper or the pen are taken for a hand. **It is an additional channel:
+`--conf` (0.4) or `--point-radius-cm` if the gripper or the pen are taken for a hand. **It is an additional channel:
 the emergency stop remains the main one.**
 
 ## Without the robot
+
+**Simulated mode** (panel *Simulated*, or `./launch.sh --simulated`): the fake arm, and the C920 webcam and its
+microphone, or the laptop's own camera (`--camera 0`) and microphone (`--device system`) without it. A camera can only be opened by one program, so
+`face.py --share-frames` lends its images to `hands.py --frames-from-face` over UDP 5019, and without table markers
+`hands.py --no-markers` counts a hand anywhere in the image as near: a hand in front of the laptop camera stops the
+fake arm, like a hand on the PCB in the lab. Hands therefore need Face running. A laptop microphone is noisy: room
+noise can read as stress (it did on the test laptop, "fearful" 0.97), so automatic mode may slow down or pause on
+its own; calibrate with `k` first, or use manual mode.
+
 
 ```bash
 python3 robot/pcb_plan.py                                  # check the PCB plan

@@ -3,7 +3,7 @@
 #   ./launch.sh                 # real robot, slow speed, routine over the PCB
 #   ./launch.sh --normal        # normal speed (0.6)
 #   ./launch.sh --cycle         # cycle between poses instead of the PCB
-#   ./launch.sh --simulated     # no robot and no Docker
+#   ./launch.sh --simulated     # no robot and no Docker; the C920 webcam, or the laptop's camera and mic
 #   ./launch.sh --dry-run       # shows the commands without opening anything
 #   ./launch.sh --restart       # closes everything, robot included, and starts from scratch (combinable)
 #   ./launch.sh --stop          # only closes everything
@@ -103,13 +103,23 @@ else
     wait_for "Enter when it is waiting for the supervisor..."
 fi
 
+# Simulated: the laptop's camera and microphone. One camera can only be opened by one program, so face.py
+# lends its images to hands.py, which watches the whole image (there are no table markers)
+FACE=; VOICE=; HANDS=; DIALOGUE=
+if [ "$SIMULATED" = 1 ]; then
+    CAM=0; MIC=system                   # the C920 webcam if it is plugged in, else the laptop's
+    grep -qs C920 /sys/class/video4linux/video*/name && CAM=C920
+    pactl list short sources 2>/dev/null | grep -q C920 && MIC=C920
+    FACE="--camera $CAM --share-frames"; VOICE="--device $MIC"; HANDS="--frames-from-face --no-markers"
+    DIALOGUE="--device $MIC"
+fi
 tab Supervisor "python3 '$DIR/supervisor/supervisor.py' --v-normal $V_NORMAL --v-cautious $V_CAUTIOUS"
-tab Face "'$PY' '$DIR/perception/face.py'"
-tab Voice "'$PY' '$DIR/perception/voice.py'"
+tab Face "'$PY' '$DIR/perception/face.py' $FACE"
+tab Voice "'$PY' '$DIR/perception/voice.py' $VOICE"
 tab Screen "'$PY' '$DIR/screen/screen.py'"
-tab Hands "'$PY' '$DIR/perception/hands.py'"           # hands next to the PCB + the PCB check
+tab Hands "'$PY' '$DIR/perception/hands.py' $HANDS"    # hands next to the PCB + the PCB check
 sleep 3                                 # let the voice measure the background noise before the robot greets
-tab Dialogue "'$PY' '$DIR/dialogue/dialogue.py'"
+tab Dialogue "'$PY' '$DIR/dialogue/dialogue.py' $DIALOGUE"
 
 echo
 echo "Ready. Stay silent for a few seconds."

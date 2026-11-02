@@ -95,10 +95,13 @@ class SimulatedArm(object):
             time.sleep(0.01)
 
     def goto_pose(self, pose, duration=3, block=True, **kwargs):
-        # Inverse of get_pose()'s made-up position: z depends only on q[1]
+        # Same position target as frankapy, keeping the tool's orientation; solved with pcb_plan's IK
         q = self.get_joints()
-        q[1] += (pose.translation[2] - self.get_pose().translation[2]) / 0.2
-        self.goto_joints(q, duration=duration, block=block)
+        _, R = pcb_plan.fk(q, 0.0)
+        target = pcb_plan.ik([float(x) for x in pose.translation], R, q, 0.0)
+        if target is None:
+            raise ValueError("no IK solution for %s" % list(pose.translation))
+        self.goto_joints(target, duration=duration, block=block)
 
     def stop_skill(self):
         self._update()
@@ -113,10 +116,8 @@ class SimulatedArm(object):
         return list(self._q)
 
     def get_pose(self):
-        # Made-up position, only to have numbers that change
-        q = self.get_joints()
-        r = 0.3 + 0.1 * (q[3] + 2.4)
-        return Pose([r * math.cos(q[0]), r * math.sin(q[0]), 0.3 + 0.2 * (q[1] + 0.8)])
+        # frankapy's TCP position, from the Panda's kinematics (pcb_plan.fk)
+        return Pose(pcb_plan.fk(self.get_joints(), 0.0)[0])
 
 
 def max_dist(a, b):

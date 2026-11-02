@@ -93,6 +93,8 @@ PHRASES = {
     "hands_near": "Careful, your hands are near the board. I'm pausing and moving away.",
     "hands_clear": "Thank you, the area is clear. Say continue when you are ready.",
     "hands_still": "Please move your hands away from the board first.",
+    "hands_again": "Careful, your hands are near the board again.",
+    "back_to_normal": "Back to normal speed.",
 }
 
 
@@ -106,11 +108,18 @@ CYCLE_PHRASES = {"approach": "Approaching the board.", "solder": "Working on the
 
 
 class Voice(object):
-    """Piper in a thread: say() does not block. speaking_callback(t_end) reports each phrase."""
+    """Piper in a thread: say() does not block. speaking_callback(t_end) reports each phrase.
+
+    Only this thread touches the audio output: it plays each phrase in 0.1 s blocks and an urgent say() just
+    raises a flag that it checks between blocks. Stopping sounddevice from another thread (sd.stop() while
+    sd.wait() runs here) hung the whole program: the robot went silent and stopped listening."""
+
+    BLOCK_S = 0.1
 
     def __init__(self, model, mute, speaking_callback):
         self.mute, self.speaking_callback = mute, speaking_callback
         self.queue = queue.Queue()
+        self.cut = threading.Event()        # set by an urgent say(): stop the phrase being played
         self.speaking_until = 0.0
         self.narrating = False              # the current phrase is narration: "stop" is still heard
         if not mute:
@@ -124,8 +133,7 @@ class Voice(object):
         if urgent:                          # cut off whatever it is saying
             while not self.queue.empty():
                 self.queue.get_nowait()
-            if not self.mute:
-                self.sd.stop()
+            self.cut.set()
         self.queue.put((PHRASES[key], False))
 
     def narrate(self, text):
@@ -137,19 +145,33 @@ class Voice(object):
     def _loop(self):
         while True:
             text, self.narrating = self.queue.get()
+            self.cut.clear()
             if self.mute:
                 print("\r\033[K[robot says] %s" % text)
                 self.speaking_until = time.time() + 0.06 * len(text)
-                time.sleep(0.06 * len(text))
+                self.cut.wait(0.06 * len(text))
                 continue
             chunks = list(self.piper.synthesize(text))
-            audio = np.concatenate([c.audio_float_array for c in chunks])
+            audio = np.concatenate([c.audio_float_array for c in chunks]).astype(np.float32)
             sr = chunks[0].sample_rate
             self.speaking_until = time.time() + len(audio) / float(sr)
             self.speaking_callback(self.speaking_until)
             print("\r\033[K[robot says] %s" % text)
-            self.sd.play(audio, sr)
-            self.sd.wait()
+            block = int(sr * self.BLOCK_S)
+            out = self.sd.OutputStream(samplerate=sr, channels=1, dtype="float32")
+            out.start()
+            try:
+                for i in range(0, len(audio), block):
+                    if self.cut.is_set():
+                        break
+                    out.write(audio[i:i + block].reshape(-1, 1))
+            finally:
+                if self.cut.is_set():
+                    out.abort()             # drop what is buffered: the urgent phrase comes now
+                    self.speaking_until = time.time()
+                else:
+                    out.stop()              # let the end of the phrase play
+                out.close()
 
 
 class Ear(object):
@@ -376,6 +398,8 @@ def main():
                 if not hands.get("lock") and t_tick - t_voice_order > 1.0:
                     phase = "working"                   # resumed from the keyboard (a, n, c)
                 elif hands.get("near"):
+                    if told_clear:                      # they came back after it said the area was clear
+                        voice.say("hands_again", urgent=True)
                     told_clear = False                  # if they leave again, it says so again
                 elif not told_clear and not voice.busy():
                     voice.say("hands_clear")
@@ -398,12 +422,17 @@ def main():
                         notice = "normal"
                     elif current == ("CAUTIOUS", "calm") and previous[0] == "PAUSED":
                         notice = "picking_up_slowly"
+                    elif current[0] == "NORMAL" and previous == ("CAUTIOUS", "after_hands"):
+                        notice = "back_to_normal"
                     if notice:
                         pending = (notice, current)
                 elif summary.get("mode") == "MANUAL" and previous is not None and current != previous \
-                        and t_tick - t_voice_order > 1.0 and "calibrating" not in (current[1], previous[1]):
+                        and t_tick - t_voice_order > 1.0 and "calibrating" not in (current[1], previous[1]) \
+                        and current[1] != "after_hands":
                     notice = {"NORMAL": "manual_normal", "CAUTIOUS": "manual_slow", "PAUSED": "manual_pause",
                               "RETRACT": "manual_retract"}.get(current[0])
+                    if previous[1] == "after_hands":   # the slow stretch after a hands stop ended on its own
+                        notice = "back_to_normal" if current[0] == "NORMAL" else None
                     if notice:
                         pending = (notice, current)
                 # Say the pending notice if it is still true: stops and what the keyboard asks for right away,
