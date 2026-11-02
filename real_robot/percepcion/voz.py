@@ -41,6 +41,7 @@ PESO_ESTRES = {"angry": 1.0, "disgust": 1.0, "fearful": 1.0, "sad": 0.6,
 CALIBRACION_S = 2.0         # s iniciales para medir el ruido de fondo
 MARGEN_VOZ_DB = 12.0        # una trama es voz si supera el ruido de fondo en tantos dB
 VOZ_MIN = 0.25              # fracción mínima de voz en la ventana para clasificar
+RUIDO_MAX_DB = -20.0        # un silencio por encima de esto es un micrófono saturado
 
 
 def conv_block(cin, cout):
@@ -200,6 +201,10 @@ def main():
                     muestras_ruido.append(energia_db(x16k[-int(SR / args.hz):]))
                     if time.time() - t_inicio >= CALIBRACION_S:
                         ruido_db = float(np.percentile(np.concatenate(muestras_ruido), 50))
+                        if ruido_db > RUIDO_MAX_DB:
+                            sys.exit("[error] ruido de fondo de %.1f dB: este micrófono está saturado o estabas "
+                                     "hablando. Repite en silencio o elige otro en Configuración -> Sonido "
+                                     "(o con --dispositivo, ver --listar)." % ruido_db)
                         print("ruido de fondo: %.1f dB. Ya puedes hablar." % ruido_db)
                     mensaje = {"t": time.time(), "fuente": "audio", "estres": None, "confianza": 0.0,
                                "etiqueta": "", "probs": {}, "voz": 0.0}
