@@ -32,6 +32,7 @@ supervisor/               runs on the host
 percepcion/               runs on the host (needs .venv)
   rostro.py                 webcam -> YuNet + mini-Xception -> stress and confidence -> UDP 5010
   voz.py                    microphone -> log-mel CNN (RAVDESS) -> stress and confidence -> UDP 5010
+  microfono.py              picks the microphone by name (default: C930e); voz.py and dialogo.py share it
   mini_xception.py          Joab's ROB311 network, converted from Keras to PyTorch
   convertir_pesos.py        verified Keras -> PyTorch conversion (only to redo it; needs TensorFlow)
   detectar_aruco.py         finds the dictionary and ids of the ArUco markers in a photo
@@ -78,7 +79,7 @@ From `real_robot/`, one terminal each:
 
 ```bash
 .venv/bin/python percepcion/rostro.py                 # camera -> stress (--camara N, --ver, --cpu)
-.venv/bin/python percepcion/voz.py                    # microphone -> stress (--dispositivo C920, --cpu)
+.venv/bin/python percepcion/voz.py                    # microphone -> stress (--dispositivo, --listar, --cpu)
 python3 supervisor/supervisor.py --v-normal 0.6 --v-cautious 0.3
 .venv/bin/python pantalla/pantalla.py                 # --completa on the operator's monitor
 .venv/bin/python dialogo/dialogo.py                   # robot speech

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Estrés del operador a partir de la voz (micrófono) -> UDP al supervisor. Se ejecuta en el host.
 
-    python3 voz.py                        # micrófono por defecto del sistema
-    python3 voz.py --dispositivo C920     # micrófono de la webcam (por nombre o índice)
+    python3 voz.py                        # micrófono de la C930e (la cámara de las manos)
+    python3 voz.py --dispositivo C920     # otro micrófono, por parte de su nombre
+    python3 voz.py --dispositivo sistema  # el predeterminado de Ubuntu
     python3 voz.py --listar               # ver los micrófonos disponibles
     python3 voz.py --wav prueba.wav       # prueba con un archivo (sin micrófono)
 
@@ -29,6 +30,8 @@ import sys
 import time
 
 import numpy as np
+
+import microfono
 
 DIR_MODELOS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "modelos")
 IP = "127.0.0.1"
@@ -178,17 +181,18 @@ def imprimir(mensaje):
 
 def main():
     p = argparse.ArgumentParser(description="Estrés por la voz -> UDP al supervisor")
-    p.add_argument("--dispositivo", help="micrófono: índice o parte del nombre (p. ej. C920)")
+    p.add_argument("--dispositivo", default=microfono.MICROFONO,
+                   help="micrófono: parte de su nombre, o 'sistema' (por defecto %s)" % microfono.MICROFONO)
     p.add_argument("--listar", action="store_true", help="listar micrófonos y salir")
     p.add_argument("--wav", help="analizar un archivo en vez del micrófono (pruebas)")
     p.add_argument("--hz", type=float, default=HZ)
     p.add_argument("--cpu", action="store_true", help="usar la CPU aunque haya GPU")
     args = p.parse_args()
 
-    import sounddevice as sd
     if args.listar:
-        print(sd.query_devices())
+        microfono.listar()
         return
+    import sounddevice as sd
     import librosa
     import torch
     if args.cpu:
@@ -211,8 +215,8 @@ def main():
         print("\nprobabilidades: %s" % mensaje["probs"])
         return
 
-    disp = int(args.dispositivo) if args.dispositivo and args.dispositivo.isdigit() else args.dispositivo
-    sr_mic = int(sd.query_devices(disp, "input")["default_samplerate"])
+    mic = microfono.Microfono(args.dispositivo)
+    sr_mic = int(sd.query_devices(mic.dispositivo, "input")["default_samplerate"])
     bufer = np.zeros(int(3 * sr_mic), np.float32)          # últimos 3 s a la frecuencia del micro
     bloques = queue.Queue()                                # el callback no pierde audio
     perdidas = []
@@ -222,13 +226,14 @@ def main():
             perdidas.append(frames)
         bloques.put(datos[:, 0].copy())
 
-    print("Micrófono: %s (%d Hz). Silencio %.0f s para medir el ruido de fondo..."
-          % (sd.query_devices(disp, "input")["name"], sr_mic, ARRANQUE_S + CALIBRACION_S))
+    print("Micrófono en uso: %s (%d Hz)" % (mic.descripcion, sr_mic))
+    print("Silencio %.0f s para medir el ruido de fondo..." % (ARRANQUE_S + CALIBRACION_S))
     t_inicio = time.time()
     suelo, calibrado = SueloRuido(), False
     ultimo, t_ultimo = None, 0.0
 
-    with sd.InputStream(device=disp, channels=1, samplerate=sr_mic, dtype="float32", callback=recibir):
+    with mic.abrir(lambda: sd.InputStream(device=mic.dispositivo, channels=1, samplerate=sr_mic,
+                                          dtype="float32", callback=recibir)):
         print("Enviando a %s:%d a %.0f Hz. Ctrl+C para salir." % (IP, PUERTO_PERCEPCION, args.hz))
         try:
             while True:

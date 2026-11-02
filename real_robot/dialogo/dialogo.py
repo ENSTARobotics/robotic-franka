@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Voz del robot: habla en inglés (Piper) y escucha palabras clave (Vosk). Se ejecuta en el host.
 
-    python3 dialogo.py                     # micrófono y altavoz por defecto (PipeWire)
+    python3 dialogo.py                     # micrófono de la C930e y altavoz del sistema
     python3 dialogo.py --teclado --mudo    # pruebas: escribes las palabras y el robot "habla" en texto
 
 Modelos: python3 descargar_modelos.py (una vez).
@@ -26,6 +26,9 @@ import threading
 import time
 
 import numpy as np
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, "percepcion"))
+import microfono
 
 DIR_MODELOS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "modelos")
 IP = "127.0.0.1"
@@ -118,9 +121,10 @@ class Oido(object):
         self.rec = KaldiRecognizer(Model(os.path.join(DIR_MODELOS, "vosk-model-small-en-us-0.15")),
                                    SR, json.dumps(PALABRAS))
         self._ya_parado = False
-        disp = int(dispositivo) if dispositivo and dispositivo.isdigit() else dispositivo
-        self.flujo = sd.RawInputStream(device=disp, samplerate=SR, channels=1, dtype="int16",
-                                       blocksize=1600, callback=self._audio)
+        mic = microfono.Microfono(dispositivo)
+        print("Micrófono en uso: %s" % mic.descripcion)
+        self.flujo = mic.abrir(lambda: sd.RawInputStream(device=mic.dispositivo, samplerate=SR, channels=1,
+                                                         dtype="int16", blocksize=1600, callback=self._audio))
         self.flujo.start()
 
     def _audio(self, datos, frames, tiempo, estado):
@@ -161,7 +165,8 @@ def clasificar(texto):
 def main():
     p = argparse.ArgumentParser(description="Voz del robot: habla y escucha palabras clave")
     p.add_argument("--voz", default="en_US-lessac-medium", help="modelo Piper en dialogo/modelos/")
-    p.add_argument("--dispositivo", help="micrófono: índice o parte del nombre (por defecto, el del sistema)")
+    p.add_argument("--dispositivo", default=microfono.MICROFONO,
+                   help="micrófono: parte de su nombre, o 'sistema' (por defecto %s)" % microfono.MICROFONO)
     p.add_argument("--teclado", action="store_true", help="escribir las palabras en vez de hablar (pruebas)")
     p.add_argument("--mudo", action="store_true", help="mostrar las frases en vez de decirlas (pruebas)")
     args = p.parse_args()
