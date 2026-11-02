@@ -39,11 +39,13 @@ When you finish: deactivate FCI and lock the joints.
 
 ## 3. Code and Docker with frankapy (ROS 1)
 
-Get the code. Until the pull requests are accepted, it is in this fork:
+Get the code. The English version with the hand detection is in this repository (default branch
+`feat/manos-cerca`); Jair's fork, https://github.com/JairVasquezT/robotic-franka (branch `feat/percepcion`),
+still has the earlier version with Spanish names.
 
 ```bash
 sudo apt install git docker.io
-git clone -b feat/percepcion https://github.com/JairVasquezT/robotic-franka.git ~/robotic-franka
+git clone https://github.com/joabzicg/robotic-franka.git ~/robotic-franka
 ```
 
 The lab's Panda is a **FER** and does not work with `franka_ros2`. Use the lab's image with frankapy:
