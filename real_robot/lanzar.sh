@@ -47,7 +47,7 @@ parar_todo() {
     echo "Cerrando todo..."
     pkill -INT -f 'supervisor/[s]upervisor(_teclado)?\.py'
     sleep 1
-    pkill -INT -f 'dialogo/[d]ialogo\.py|pantalla/[p]antalla\.py|percepcion/([r]ostro|[v]oz|[p]laca)\.py|robot/[c]ontrolador_ciclo\.py'
+    pkill -INT -f 'dialogo/[d]ialogo\.py|pantalla/[p]antalla\.py|percepcion/([r]ostro|[v]oz|[p]laca|[m]anos)\.py|robot/[c]ontrolador_ciclo\.py'
     if ps -eo args | grep -qE '[b]uild/franka_interface|[r]oscore|python3 [c]ontrolador_ciclo'; then
         echo "Para cerrar los programas del robot hace falta tu contraseña:"
         sudo docker exec "$CONTENEDOR" bash -c "pkill -INT -f '[c]ontrolador_ciclo'; sleep 2
@@ -107,7 +107,7 @@ pestana Supervisor "python3 '$DIR/supervisor/supervisor.py' --v-normal $V_NORMAL
 pestana Cara "'$PY' '$DIR/percepcion/rostro.py'"
 pestana Voz "'$PY' '$DIR/percepcion/voz.py'"
 pestana Pantalla "'$PY' '$DIR/pantalla/pantalla.py'"
-pestana Placa "'$PY' '$DIR/percepcion/placa.py'"
+pestana Manos "'$PY' '$DIR/percepcion/manos.py'"      # manos junto a la placa + comprobación de la placa
 sleep 3                                 # que la voz mida el ruido de fondo antes de que el robot salude
 pestana Dialogo "'$PY' '$DIR/dialogo/dialogo.py'"
 

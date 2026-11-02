@@ -12,6 +12,8 @@ Habla con el supervisor por UDP: recibe su resumen en 5014 y le manda comandos a
     {"comando": "empezar" | "pausa" | "seguir" | "lento" | "hablando", "hasta": t}
 Mientras el robot habla (y 0.5 s después) el micrófono se ignora: aquí no se reconocen
 palabras y el supervisor descarta la emoción de la voz (no se oye a sí mismo).
+Manos junto a la placa (el supervisor lo marca en su resumen): avisa de que se para y se aparta,
+pide apartarlas, y cuando la zona está libre espera "continue" (o "yes", "ready") para seguir.
 
 "stop" por voz es un canal de seguridad ADICIONAL: el paro de emergencia sigue mandando.
 """
@@ -87,6 +89,10 @@ FRASES = {
     "manual_lento": "Okay, going slower.",
     "manual_pausa": "Okay, pausing.",
     "manual_retirar": "Okay, moving away from the board.",
+    # Manos junto a la placa (percepcion/manos.py)
+    "manos_cerca": "Careful, your hands are near the board. I'm pausing and moving away.",
+    "manos_libre": "Thank you, the area is clear. Say continue when you are ready.",
+    "manos_aun": "Please move your hands away from the board first.",
 }
 
 
@@ -251,7 +257,9 @@ def main():
     print("Diálogo listo (%s). Palabras: stop, wait, yes, no, slow down, continue, ready. Ctrl+C para salir."
           % ("teclado" if args.teclado else "micrófono"))
 
-    fase = "esperando_supervisor"     # -> espera_inicio -> trabajando <-> pregunta_seguir / espera_reanudar -> fin
+    fase = "esperando_supervisor"     # -> espera_inicio -> trabajando <-> pregunta_seguir / espera_reanudar
+                                      #    / espera_manos -> fin
+    avisado_libre = False             # en espera_manos: ya se dijo que la zona está libre
     resumen, t_resumen, previo, t_ultimo_aviso = None, 0.0, None, 0.0
     pendiente = None                  # (aviso, estado al que se refiere): se dirá cuando toque
     t_orden_voz = 0.0                 # el resumen tarda en reflejar una orden de voz recién enviada
@@ -301,7 +309,16 @@ def main():
                 if intencion is None or not conectado or calibrando:
                     continue
                 t_orden_voz = t_tick
-                if intencion == "parar" and fase in ("trabajando", "pregunta_seguir", "espera_reanudar"):
+                manos = resumen.get("manos") or {}
+                if intencion == "si" and fase == "espera_manos":
+                    if manos.get("cerca"):
+                        voz.decir("manos_aun")          # el supervisor también lo ignoraría
+                    else:
+                        comando("seguir")
+                        voz.decir("sigo_lento")
+                        fase, t_ultimo_aviso = "trabajando", t_tick
+                elif intencion == "parar" and fase in ("trabajando", "pregunta_seguir", "espera_reanudar",
+                                                       "espera_manos"):
                     comando("pausa")                    # primero parar, luego hablar
                     if fase == "trabajando":
                         voz.decir("parado", urgente=True)
@@ -349,6 +366,21 @@ def main():
             elif conectado and fase == "espera_inicio" and placa is False and not calibrando and not voz.ocupado():
                 voz.decir("placa_perdida")
                 fase = "espera_placa"
+            # Manos junto a la placa: el supervisor ya retiró el robot; aquí se explica y se espera "continue"
+            manos = (resumen.get("manos") or {}) if conectado else {}
+            # Tras un "continue" llegan aún resúmenes de antes de que el supervisor quitara el bloqueo
+            al_dia = conectado and resumen.get("t", 0.0) > t_orden_voz + 0.15
+            if al_dia and manos.get("bloqueo") and fase in ("trabajando", "pregunta_seguir", "espera_reanudar"):
+                voz.decir("manos_cerca", urgente=True)
+                fase, avisado_libre, pendiente = "espera_manos", False, None
+            elif conectado and fase == "espera_manos":
+                if not manos.get("bloqueo") and t_tick - t_orden_voz > 1.0:
+                    fase = "trabajando"                 # reanudado desde el teclado (a, n, c)
+                elif manos.get("cerca"):
+                    avisado_libre = False               # si vuelven a salir, se avisa otra vez
+                elif not avisado_libre and not voz.ocupado():
+                    voz.decir("manos_libre")
+                    avisado_libre = True
             # Si arranca o sigue desde el teclado (a, n, c, r), el diálogo no se queda esperando un "yes"
             if conectado and fase in ("espera_placa", "espera_inicio", "pregunta_seguir", "espera_reanudar") \
                     and t_tick - t_orden_voz > 1.0 \

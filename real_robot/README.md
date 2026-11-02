@@ -36,8 +36,9 @@ percepcion/               runs on the host (needs .venv)
   mini_xception.py          Joab's ROB311 network, converted from Keras to PyTorch
   convertir_pesos.py        verified Keras -> PyTorch conversion (only to redo it; needs TensorFlow)
   placa.py                  checks that a non-white rectangle (the PCB) is in place
+  manos.py                  table camera -> YOLO hand detector -> hands near the PCB -> UDP 5016 (also runs placa)
   detectar_aruco.py         finds the dictionary and ids of the ArUco markers in a photo
-  modelos/                  YuNet, mini-Xception, voice CNN and their licenses
+  modelos/                  YuNet, mini-Xception, voice CNN, hand YOLO and their licenses
 pantalla/pantalla.py      operator screen: camera, face and voice expression, state, robot
 dialogo/                  runs on the host
   dialogo.py                the robot speaks English (Piper) and understands keywords (Vosk)
@@ -64,12 +65,13 @@ cd ~/robotic-franka/real_robot      # or wherever you cloned it
 1. **Stack tab:** the script opens it after you press Enter. Type your password and wait for `stack listo`, then go
    back and press Enter.
 2. **Controller tab:** type your password, check what it prints and press Enter there. Then press Enter in the
-   first terminal. The other tabs open: Supervisor, Cara, Voz, Pantalla, Placa and Dialogo.
+   first terminal. The other tabs open: Supervisor, Cara, Voz, Pantalla, Manos and Dialogo.
 3. **Calibrate:** stay quiet for a few seconds. Then press `k` in the Supervisor tab, look at the camera and talk
    normally for 20 s. Repeat this for each person.
 4. **Start:** put the PCB in place, keep your hands off it and answer *yes* when the robot asks. The `a` key in the
    Supervisor tab also starts it, without checking the PCB.
-5. **Stop:** say *stop*, press `p` in the Supervisor tab, or use the emergency stop.
+5. **Stop:** say *stop*, press `p` in the Supervisor tab, or use the emergency stop. Hands near the PCB also stop
+   it and move it away; say *continue* once they are out.
 6. **Shut down:** `q` in Supervisor and Ctrl+C in Stack (or `./lanzar.sh --parar`). Then, in Desk, deactivate FCI
    and lock the joints.
 
@@ -183,6 +185,7 @@ an additional channel: the emergency stop remains the main one.**
 | 5013 | dialogue | supervisor |
 | 5014 | supervisor | dialogue |
 | 5015 | PCB check | dialogue |
+| 5016 | hand check | supervisor |
 
 ## PCB check (`placa.py`, optional)
 
@@ -199,6 +202,39 @@ With it running, the robot asks for the PCB until it is there ("Please place the
 detected. Shall we begin?"). Without it, the robot greets as usual. Until the routine starts it keeps checking: if
 the PCB stops being visible, a hand over it included, the robot says so and *yes* does not start it. During the
 routine it does not check, because the arm itself covers the PCB.
+
+## Hands near the PCB (`manos.py`)
+
+The table camera (the C930e, which also sees the ArUco markers) runs a YOLOv8n hand detector
+(`percepcion/modelos/manos_yolov8n.pt`, from the team's YOLO_hands; see `MANOS_YOLO.txt`). The markers place the
+recorded PCB corners in the image, and the watched zone is the PCB plus a margin (5 cm, `--margen-cm`). A hand
+counts when its box touches that zone. It is "near" with hands in 2 of the last 3 images (10 Hz) and clears after
+1 s without them.
+
+```bash
+.venv/bin/python percepcion/manos.py --ver     # zone in green (red with hands), detected hands in orange
+```
+
+A camera can only be opened by one program, so `manos.py` also does the PCB check and sends what `placa.py`
+sends; `lanzar.sh` opens `manos.py` instead of `placa.py`. Use `--sin-placa` if `placa.py` runs on another camera.
+
+What happens, in automatic and in manual mode:
+
+1. Hands near the PCB while the robot is allowed to move (NORMAL or CAUTIOUS): the supervisor sends RETRACT, the
+   controller stops and lifts the tool 5 cm, and the robot says "Careful, your hands are near the board. I'm
+   pausing and moving away."
+2. It stays there while there are hands, and also after they leave: "Thank you, the area is clear. Say continue
+   when you are ready."
+3. *Continue* (or *yes*, *ready*) resumes slowly (CAUTIOUS for 20 s), like after a *stop*. With hands still there
+   it answers "Please move your hands away from the board first." and does not move. In the Supervisor tab,
+   `a`, `n` or `c` also resume, with the same check.
+
+Before the routine starts (robot paused), hands do not trigger anything: the operator is placing the PCB. If the
+robot is paused for another reason, the block starts as soon as something tries to resume with hands there.
+Without `manos.py` running nothing is watched, and the screen and the supervisor show "manos --". The detector
+is trained on generic photos of hands: check it with `--ver` on the lab table before trusting it, and adjust
+`--conf` (0.4) or `--margen-cm` if the gripper or the pen are taken for a hand. **It is an additional channel:
+the emergency stop remains the main one.**
 
 ## Without the robot
 

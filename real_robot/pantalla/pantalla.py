@@ -60,6 +60,8 @@ MENSAJE = {
     ("CAUTIOUS", "manual"): "Voy más lento",
     ("PAUSED", "manual"): "En pausa",
     ("RETRACT", "manual"): "Me alejé de la placa",
+    ("RETRACT", "manos"): "Manos cerca de la placa: me alejo. Apártalas",
+    ("RETRACT", "manos_libre"): "Zona libre. Di \"continue\" para seguir",
 }
 EXPRESION = {"angry": "Enfado", "disgust": "Asco", "fear": "Miedo", "fearful": "Miedo",
              "happy": "Alegría", "sad": "Tristeza", "surprise": "Sorpresa", "surprised": "Sorpresa",

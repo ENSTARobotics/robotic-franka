@@ -22,10 +22,11 @@ follow [`real_robot/SETUP.md`](real_robot/SETUP.md).
 | Trust index `T(t)` and NORMAL / CAUTIOUS / PAUSED state machine | Works live with a simulated robot, not yet on the real robot | `real_robot/supervisor/` |
 | Operator screen | Works live with a simulated robot, not yet on the real robot | `real_robot/pantalla/` |
 | Spoken dialogue, task narration and voice commands ("stop", "slow down") | Works live with a simulated robot, not yet on the real robot | `real_robot/dialogo/` |
-| Hand detection | ROS 2 package, not integrated with the real robot | `aided_building_ws/src/aided_building_hand_perception/` |
+| Hands near the PCB: stop, move away, wait for "continue" (YOLO hand detector) | Tested with recorded commands and a simulated robot; not yet with the lab camera or the real robot | `real_robot/percepcion/manos.py` |
+| Hand detection (MediaPipe) | ROS 2 package, not integrated with the real robot | `aided_building_ws/src/aided_building_hand_perception/` |
 | Gazebo simulation of an FR3 | Simulation only | `aided_building_ws/` |
 
-Not built yet: hand distance as a trust input, smooth braking (`stop_skill()` stops abruptly),
+Not built yet: hand distance as a trust input (hands only stop the robot), smooth braking (`stop_skill()` stops abruptly),
 per-participant calibration, and the user study.
 
 ## Who did what
@@ -69,6 +70,7 @@ proj-idea.md             original project concept
 ## Safety
 
 This is a course prototype, not a certified system. Someone must hold the emergency stop whenever the
-robot is active. Voice "stop" is an additional channel, never the main one. Hand detection is not
-integrated, so the robot does **not** stop if a hand comes close. No validation against ISO/TS 15066
+robot is active. Voice "stop" is an additional channel, never the main one. Hand detection
+(`real_robot/percepcion/manos.py`) stops the robot and moves it away when hands come near the PCB, but it has
+not been validated in the lab and only watches the PCB zone, not the whole arm. No validation against ISO/TS 15066
 has been done.

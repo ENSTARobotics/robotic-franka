@@ -110,6 +110,36 @@ class Zona(object):
         return cobertura, float(cv2.contourArea(mayor) / max(1.0, ancho * alto))
 
 
+class DetectorPlaca(object):
+    """Estado estable de la placa: True / False / None (no ve los marcadores). manos.py lo reutiliza."""
+
+    def __init__(self, zona):
+        self.zona = zona
+        self.presente, self.candidato, self.t_candidato = None, None, 0.0
+        self.puntuacion, self.rectangulo = None, 0.0
+
+    def actualizar(self, bgr, t):
+        """Con zona.actualizar() ya llamado sobre esta imagen."""
+        self.puntuacion, self.rectangulo = None, 0.0
+        if self.zona.homografia is not None:
+            self.puntuacion, self.rectangulo = self.zona.analizar(self.zona.rectificar(bgr))
+            ahora = self.puntuacion >= MIN_COBERTURA and self.rectangulo >= MIN_RECTANGULO
+            if ahora != self.candidato:
+                self.candidato, self.t_candidato = ahora, t
+            if self.presente is None or t - self.t_candidato >= ESTABLE_S:
+                self.presente = self.candidato
+        return self.presente
+
+    def mensaje(self):
+        return {"t": time.time(), "presente": self.presente,
+                "puntuacion": None if self.puntuacion is None else round(self.puntuacion, 3)}
+
+    def texto(self):
+        return "%s  cubre %s  rectangular %.0f%%" % (
+            {True: "placa presente", False: "sin placa", None: "no veo los marcadores"}[self.presente],
+            "--" if self.puntuacion is None else "%.0f%%" % (100 * self.puntuacion), 100 * self.rectangulo)
+
+
 def abrir_camara(nombre):
     camara = cv2.VideoCapture(buscar_camara(nombre), cv2.CAP_V4L2)
     camara.set(cv2.CAP_PROP_FRAME_WIDTH, ANCHO)
@@ -126,10 +156,10 @@ def main():
     args = p.parse_args()
 
     zona = Zona()
+    placa = DetectorPlaca(zona)
     camara = abrir_camara(args.camara)
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     print("Mirando la zona de la placa. Enviando a %s:%d. Ctrl+C para salir." % (IP, PUERTO_PLACA))
-    presente, candidato, t_candidato = None, None, 0.0
     try:
         while True:
             t_tick = time.time()
@@ -139,20 +169,9 @@ def main():
                 sys.exit("[error] la cámara dejó de enviar imágenes")
             gris = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
             vistos = zona.actualizar(gris)
-            puntuacion, rectangulo = None, 0.0
-            if zona.homografia is not None:
-                puntuacion, rectangulo = zona.analizar(zona.rectificar(bgr))
-                ahora = puntuacion >= MIN_COBERTURA and rectangulo >= MIN_RECTANGULO
-                if ahora != candidato:
-                    candidato, t_candidato = ahora, t_tick
-                if presente is None or t_tick - t_candidato >= ESTABLE_S:
-                    presente = candidato
-            sock.sendto(json.dumps({"t": time.time(), "presente": presente,
-                                    "puntuacion": None if puntuacion is None else round(puntuacion, 3)}).encode("utf-8"),
-                        (IP, PUERTO_PLACA))
-            sys.stdout.write("\r\033[K%s  cubre %s  rectangular %.0f%%  marcadores %d/4"
-                             % ({True: "placa presente", False: "sin placa", None: "no veo los marcadores"}[presente],
-                                "--" if puntuacion is None else "%.0f%%" % (100 * puntuacion), 100 * rectangulo, vistos))
+            presente = placa.actualizar(bgr, t_tick)
+            sock.sendto(json.dumps(placa.mensaje()).encode("utf-8"), (IP, PUERTO_PLACA))
+            sys.stdout.write("\r\033[K%s  marcadores %d/4" % (placa.texto(), vistos))
             sys.stdout.flush()
             if args.ver:
                 if zona.homografia is not None:

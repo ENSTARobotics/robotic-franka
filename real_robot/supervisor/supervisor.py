@@ -8,6 +8,9 @@ de confianza.py, y manda el estado al controlador por UDP 5005, igual que
 supervisor_teclado.py. Envía un resumen a pantalla.py por UDP 5011.
 Órdenes de voz de dialogo.py (UDP 5013): empezar = a; pausa = p; lento = CAUTIOUS 20 s;
 seguir = automático desde CAUTIOUS 20 s. Mientras el robot habla, ignora la emoción de la voz.
+Manos (percepcion/manos.py, UDP 5016): si hay manos junto a la placa cuando el robot iba a moverse,
+RETRACT (para y sube 5 cm) y se queda así, en cualquier modo, hasta que la zona esté libre Y el
+operador diga "continue" (o pulse a, n o c). Sin manos.py abierto no se vigila.
 Teclas:  k = calibrar el nivel normal del operador (robot en pausa; ignora las órdenes de voz)
          a = AUTOMÁTICO (el estado lo decide T(t))
          n / c / p / r = MANUAL: NORMAL / CAUTIOUS / PAUSED / RETRACT (anulan el automático)
@@ -35,6 +38,8 @@ PUERTO_PERCEPCION = 5010
 PUERTO_PANEL = 5011         # resumen para pantalla.py
 PUERTO_COMANDOS = 5013      # órdenes de dialogo.py (voz)
 PUERTO_DIALOGO = 5014       # resumen para dialogo.py
+PUERTO_MANOS = 5016         # percepcion/manos.py
+EDAD_MANOS = 0.5            # s: un aviso de manos más viejo no cuenta
 HZ_PANEL = 10.0
 MARGEN_ECO = 0.5            # s tras hablar el robot en que se ignora la emoción de la voz
 CALIBRACION_S = 20.0        # s que dura la calibración con la tecla k
@@ -50,7 +55,7 @@ COLOR = {"NORMAL": "\033[42;30m", "CAUTIOUS": "\033[43;30m", "PAUSED": "\033[41;
 RESET = "\033[0m"
 
 COLUMNAS = (["t_host", "tecla", "modo", "cmd_state", "cmd_speed_scale", "cmd_retract", "T", "estres",
-             "sin_datos", "motivo", "normal_rostro", "normal_audio"]
+             "sin_datos", "motivo", "normal_rostro", "normal_audio", "manos_cerca", "bloqueo_manos"]
             + ["%s_%s" % (f, k) for f in FUENTES for k in ("estres", "confianza", "etiqueta", "edad_s")]
             + ["rob_edad_s", "rob_state", "rob_segment", "rob_action", "rob_speed_scale", "rob_event", "rob_done", "rob_error",
                "ee_x", "ee_y", "ee_z"])
@@ -101,7 +106,12 @@ def main():
     sock_voz = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock_voz.bind((IP, PUERTO_COMANDOS))
     sock_voz.setblocking(False)
+    sock_manos = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock_manos.bind((IP, PUERTO_MANOS))
+    sock_manos.setblocking(False)
     silencio_audio_hasta = 0.0
+    manos, t_manos = {}, None
+    bloqueo_manos = False       # manos junto a la placa: RETRACT hasta zona libre + "continue"
 
     confianza, fsm = Confianza(), MaquinaEstados()
     modo, manual = "MANUAL", "PAUSED"
@@ -127,6 +137,22 @@ def main():
         while True:
             t_tick = time.time()
 
+            # Manos junto a la placa (manos.py). Sin mensajes recientes no se sabe: no cuenta como cerca
+            for m in leer_todo(sock_manos):
+                manos, t_manos = m, t_tick
+            vigilando = t_manos is not None and t_tick - t_manos <= EDAD_MANOS and manos.get("cerca") is not None
+            manos_cerca = vigilando and manos.get("cerca") is True
+
+            def soltar_manos(origen):
+                """"continue" (o a/n/c) con la zona libre quita el bloqueo; con manos todavía, no."""
+                nonlocal bloqueo_manos
+                if manos_cerca:
+                    linea("[manos] %s ignorado: sigue habiendo manos junto a la placa" % origen)
+                    return False
+                bloqueo_manos = False
+                linea("[manos] zona libre y %s: se reanuda" % origen)
+                return True
+
             # Teclado
             tecla = ""
             if select.select([fd], [], [], 0)[0]:
@@ -150,6 +176,8 @@ def main():
                     linea("[tecla %s] modo MANUAL -> %s" % (tecla, color(manual)))
                 elif tecla.strip():
                     linea("[tecla %r] no reconocida (k, a, n, c, p, r, q)" % tecla)
+                if bloqueo_manos and tecla in ("a", "n", "c"):
+                    soltar_manos("tecla " + tecla)
 
             # Órdenes de voz (dialogo.py); se registran en la columna "tecla" como voz:<orden>
             for m in leer_todo(sock_voz):
@@ -159,6 +187,8 @@ def main():
                     continue
                 if t_fin_calibracion is not None:
                     continue                    # le pedimos que hable: un "yes" mal oído no debe arrancar el robot
+                if bloqueo_manos and orden in ("empezar", "seguir") and not soltar_manos("voz " + orden):
+                    continue
                 if orden == "empezar":
                     modo = "AUTO"
                 elif orden == "pausa":
@@ -196,10 +226,20 @@ def main():
                                                  color(fsm.estado), fsm.motivo))
 
             estado = fsm.estado if modo == "AUTO" else manual
+            # Manos: sólo bloquean si el robot iba a moverse (antes de empezar el operador coloca la placa).
+            # Si ya estaba en pausa, el bloqueo llega en cuanto algo intente reanudar con las manos ahí
+            if manos_cerca and not bloqueo_manos and estado in ("NORMAL", "CAUTIOUS"):
+                bloqueo_manos = True
+                linea("[manos] manos junto a la placa -> %s hasta zona libre y \"continue\"" % color("RETRACT"))
+            if bloqueo_manos:
+                estado = "RETRACT"
+            causa = ("calibrando" if t_fin_calibracion is not None else
+                     ("manos" if manos_cerca else "manos_libre") if bloqueo_manos else
+                     fsm.causa if modo == "AUTO" else "manual")
             cmd = {"t": time.time(), "enabled": estado != "PAUSED", "speed_scale": velocidad[estado],
                    "retract": estado == "RETRACT", "state": "PAUSED" if estado == "RETRACT" else estado,
                    "trust": None if T is None else round(T, 3),
-                   "reason": fsm.motivo if modo == "AUTO" else "manual"}
+                   "reason": "manos junto a la placa" if bloqueo_manos else fsm.motivo if modo == "AUTO" else "manual"}
             sock_cmd.sendto(json.dumps(cmd).encode("utf-8"), (IP, PUERTO_CMD))
 
             # Estado del robot
@@ -219,10 +259,9 @@ def main():
                     fuentes[f] = {"etiqueta": m.get("etiqueta") or "", "estres": m.get("estres"),
                                   "confianza": m.get("confianza"), "valida": f in validas,
                                   "edad": round(t_tick - t_f, 2)}
-                panel = {"t": t_tick, "modo": modo, "estado": estado,
-                         "causa": "calibrando" if t_fin_calibracion is not None else
-                                  fsm.causa if modo == "AUTO" else "manual", "motivo": cmd["reason"],
+                panel = {"t": t_tick, "modo": modo, "estado": estado, "causa": causa, "motivo": cmd["reason"],
                          "calibracion": calibracion, "T": cmd["trust"], "fuentes": fuentes,
+                         "manos": {"vigilando": vigilando, "cerca": manos_cerca, "bloqueo": bloqueo_manos},
                          "robot": {"conectado": edad is not None and edad <= TIMEOUT_ROBOT,
                                    "segment": robot.get("segment", ""), "action": robot.get("action", ""),
                                    "seg_index": robot.get("seg_index", 0), "n_segments": robot.get("n_segments", 0),
@@ -246,8 +285,10 @@ def main():
             else:
                 rob_txt = "%s %s" % (robot.get("segment", "?"), {"segmento": "MOVIENDO", "retraccion": "SUBIENDO",
                                      "soldando": "SOLDANDO"}.get(robot.get("action"), "quieto"))
-            texto = "\r\033[K%-6s %s %s | %s | %s" % (modo, T_txt, color(estado),
-                                                     ", ".join(fuentes_txt) or "sin percepción", rob_txt)
+            manos_txt = ("\033[41;37m MANOS \033[0m" if manos_cerca else
+                         "\033[44;37m di continue \033[0m" if bloqueo_manos else "" if vigilando else "manos --")
+            texto = "\r\033[K%-6s %s %s | %s | %s %s" % (modo, T_txt, color(estado),
+                                                        ", ".join(fuentes_txt) or "sin percepción", rob_txt, manos_txt)
             if texto != texto_prev and t_tick - t_pantalla >= 1.0 / HZ_PANTALLA:
                 sys.stdout.write(texto)
                 sys.stdout.flush()
@@ -256,7 +297,8 @@ def main():
             # CSV
             fila = [round(t_tick, 3), tecla, modo, cmd["state"], cmd["speed_scale"], cmd["retract"],
                     "" if T is None else round(T, 4), "" if confianza.estres is None else round(confianza.estres, 4),
-                    sin_datos, fsm.motivo, confianza.normal.get("rostro", ""), confianza.normal.get("audio", "")]
+                    sin_datos, fsm.motivo, confianza.normal.get("rostro", ""), confianza.normal.get("audio", ""),
+                    manos_cerca if vigilando else "", bloqueo_manos]
             for f in FUENTES:
                 if f in confianza.ultimo:
                     t_f, m = confianza.ultimo[f]
