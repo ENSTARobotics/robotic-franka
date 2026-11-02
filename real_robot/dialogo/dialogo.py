@@ -34,6 +34,8 @@ DIR_MODELOS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "modelos"
 IP = "127.0.0.1"
 PUERTO_COMANDOS = 5013
 PUERTO_DIALOGO = 5014
+PUERTO_PLACA = 5015         # percepcion/placa.py; si no está abierto, no se comprueba la placa
+ESPERA_PLACA_S = 2.0        # s que se espera su primer mensaje antes de saludar sin él
 HZ = 20.0
 SR = 16000
 MARGEN_ECO = 0.5            # s tras hablar en que se sigue ignorando el micrófono
@@ -50,6 +52,10 @@ LENTO = {"slower", "slow down"}
 # Lo que dice el robot (evitando las palabras clave en lo posible)
 FRASES = {
     "bienvenida": "Welcome! I'm your soldering assistant. Shall we begin?",
+    "placa_falta": "Welcome! Please place the PCB on the table.",
+    "placa_recuerda": "Please place the PCB on the table first.",
+    "placa_ok": "PCB detected. Shall we begin?",
+    "bienvenida_placa": "Welcome! PCB detected. Shall we begin?",
     "empezamos": "Great, let's start. Say stop at any time.",
     "aun_no": "No problem. Say ready when you want to start.",
     "parado": "Stopping. Sorry if I was going too fast.",
@@ -218,6 +224,9 @@ def main():
     sock_resumen = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock_resumen.bind((IP, PUERTO_DIALOGO))
     sock_resumen.setblocking(False)
+    sock_placa = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock_placa.bind((IP, PUERTO_PLACA))
+    sock_placa.setblocking(False)
 
     def comando(nombre, **extra):
         extra.update({"t": time.time(), "comando": nombre})
@@ -233,6 +242,7 @@ def main():
     resumen, t_resumen, previo, t_ultimo_aviso = None, 0.0, None, 0.0
     pendiente = None                  # (aviso, estado al que se refiere): se dirá cuando toque
     t_orden_voz = 0.0                 # el resumen tarda en reflejar una orden de voz recién enviada
+    placa, t_placa, t_conectado = None, 0.0, None   # placa = True / False / None (desconocido)
     ultima_etapa = None               # última etapa de la tarea anunciada
     try:
         while True:
@@ -245,6 +255,15 @@ def main():
                 except ValueError:
                     pass
             conectado = resumen is not None and t_tick - t_resumen <= SIN_SUPERVISOR
+            while True:
+                try:
+                    placa, t_placa = json.loads(sock_placa.recv(4096).decode("utf-8")).get("presente"), t_tick
+                except (BlockingIOError, socket.error):
+                    break
+                except ValueError:
+                    pass
+            if t_tick - t_placa > SIN_SUPERVISOR:
+                placa = None
 
             # Palabras oídas (o escritas)
             oidas = []
@@ -269,6 +288,8 @@ def main():
                     comando("lento")
                     voz.decir("lento")
                     t_ultimo_aviso = t_tick
+                elif intencion == "si" and fase == "espera_placa":
+                    voz.decir("placa_recuerda")
                 elif intencion == "si" and fase == "espera_inicio":
                     comando("empezar")
                     voz.decir("empezamos")
@@ -284,11 +305,24 @@ def main():
                     fase = "espera_reanudar"
 
             # Lo que hace el sistema por su cuenta
+            # Saludo: comprueba la placa si placa.py está abierto; si no, saluda como siempre
+            if conectado and t_conectado is None:
+                t_conectado = t_tick
             if conectado and fase == "esperando_supervisor":
-                voz.decir("bienvenida")
+                if placa is True:
+                    voz.decir("bienvenida_placa")
+                    fase = "espera_inicio"
+                elif placa is False:
+                    voz.decir("placa_falta")
+                    fase = "espera_placa"
+                elif t_tick - t_conectado >= ESPERA_PLACA_S:
+                    voz.decir("bienvenida")
+                    fase = "espera_inicio"
+            elif conectado and fase == "espera_placa" and placa is not False:
+                voz.decir("placa_ok" if placa else "bienvenida")
                 fase = "espera_inicio"
             # Si arranca o sigue desde el teclado (a, n, c, r), el diálogo no se queda esperando un "yes"
-            if conectado and fase in ("espera_inicio", "pregunta_seguir", "espera_reanudar") \
+            if conectado and fase in ("espera_placa", "espera_inicio", "pregunta_seguir", "espera_reanudar") \
                     and t_tick - t_orden_voz > 1.0 \
                     and (resumen.get("modo") == "AUTO" or resumen.get("estado") != "PAUSED"):
                 fase = "trabajando"

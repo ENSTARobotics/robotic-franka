@@ -8,3 +8,5 @@ __pycache__/
 .venv/
 # Voice models for dialogo.py (~130 MB): downloaded by dialogo/descargar_modelos.py
 dialogo/modelos/
+# Photo of this table from this camera, made by percepcion/placa.py --referencia
+datos/placa_referencia.png
