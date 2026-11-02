@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Estrés del operador a partir de la cara (webcam) -> UDP al supervisor. Se ejecuta en el host.
 
-    python3 rostro.py --ver                   # webcam 0, con ventana de vista previa
-    python3 rostro.py --camara 2 --ver        # otra cámara
+    python3 rostro.py --ver                   # webcam C920, con ventana de vista previa
+    python3 rostro.py --camara C930e --ver    # otra cámara, por nombre o por número de /dev/videoN
     python3 rostro.py --imagen foto.jpg       # prueba con una imagen fija (sin cámara)
 
 Detector YuNet (OpenCV) + mini-Xception (FER-2013, 7 expresiones) del TD4 de ROB311 de
@@ -18,6 +18,7 @@ Ojo: una expresión facial no es una medida fiable de la emoción interna; FER-2
 fotos de baja resolución y clases desbalanceadas. Por eso se envía también la confianza.
 """
 import argparse
+import glob
 import json
 import math
 import os
@@ -33,6 +34,7 @@ IP = "127.0.0.1"
 PUERTO_PERCEPCION = 5010
 PUERTO_IMAGEN = 5012        # imagen anotada para pantalla.py
 ANCHO_IMAGEN = 640
+CAMARA = "C920"             # la C930e es para las manos
 HZ = 10.0
 
 ETIQUETAS = ["Angry", "Disgust", "Fear", "Happy", "Sad", "Surprise", "Neutral"]
@@ -90,6 +92,23 @@ def estres_y_confianza(p):
     return min(1.0, max(0.0, estres)), max(0.0, 1.0 - entropia / math.log(len(ETIQUETAS)))
 
 
+def buscar_camara(camara):
+    """Número de /dev/videoN de la cámara: por número, o por parte de su nombre (no cambia al
+    reconectarla). Cada webcam crea varios nodos; el de imagen es el de index 0."""
+    if camara.isdigit():
+        return int(camara)
+    disponibles = {}
+    for ruta in glob.glob("/sys/class/video4linux/video*"):
+        with open(os.path.join(ruta, "index")) as f_index, open(os.path.join(ruta, "name")) as f_name:
+            if f_index.read().strip() == "0":
+                disponibles[f_name.read().strip()] = int(os.path.basename(ruta)[5:])
+    for nombre, numero in sorted(disponibles.items()):
+        if camara.lower() in nombre.lower():
+            return numero
+    sys.exit("[error] no encuentro la cámara '%s'. Disponibles: %s. Usa --camara <nombre o número>."
+             % (camara, ", ".join("%s (%d)" % d for d in sorted(disponibles.items())) or "ninguna"))
+
+
 def anotar(bgr, caja, mensaje):
     if caja is not None:
         x, y, w, h = caja
@@ -115,7 +134,7 @@ def enviar_imagen(sock, bgr):
 
 def main():
     p = argparse.ArgumentParser(description="Estrés por expresión facial -> UDP al supervisor")
-    p.add_argument("--camara", type=int, default=0, help="índice de la webcam (por defecto 0)")
+    p.add_argument("--camara", default=CAMARA, help="nombre o número de la webcam (por defecto %s)" % CAMARA)
     p.add_argument("--imagen", help="usar una imagen fija en vez de la cámara (pruebas)")
     p.add_argument("--ver", action="store_true", help="ventana con la cara y la expresión")
     p.add_argument("--hz", type=float, default=HZ)
@@ -138,9 +157,10 @@ def main():
             sys.exit("[error] no puedo leer %s" % args.imagen)
         camara = None
     else:
-        camara = cv2.VideoCapture(args.camara)
+        numero = buscar_camara(args.camara)
+        camara = cv2.VideoCapture(numero, cv2.CAP_V4L2)
         if not camara.isOpened():
-            sys.exit("[error] no puedo abrir la cámara %d (prueba --camara 1, 2...)" % args.camara)
+            sys.exit("[error] no puedo abrir /dev/video%d: ¿la está usando otro programa?" % numero)
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     print("Enviando a %s:%d a %.0f Hz. Ctrl+C para salir." % (IP, PUERTO_PERCEPCION, args.hz))
 
