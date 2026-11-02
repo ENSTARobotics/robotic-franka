@@ -5,7 +5,7 @@ with `franka_ros2`. So this part does not use the ROS 2 workspace: it runs on **
 in the lab's Docker image `jgarcia10/u2is-franka-ros1`, and talks over UDP to programs on the host.
 
 **First time with the robot (network, Desk, Docker, installation): see [SETUP.md](SETUP.md).**
-What has been tested on the real robot is listed in the [main README](../README.md#status-november-1-2026).
+What has been tested on the real robot is listed in the [main README](../README.md#status-november-2-2026).
 
 ```text
 camera  -> percepcion/rostro.py -\

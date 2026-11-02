@@ -85,8 +85,13 @@ python3 -m venv .venv
 .venv/bin/python -c "import cv2, torch, librosa, sounddevice, PIL, piper, vosk; print('CUDA:', torch.cuda.is_available())"
 ```
 
-In *Settings → Sound*, choose your microphone and speakers. `voz.py` and `dialogo.py` share the system
-microphone.
+Choose your speakers in *Settings → Sound*. Cameras and microphones are chosen by name:
+
+- `rostro.py` looks for a Logitech C920. On another computer use `--camara <name or number>`; if it cannot
+  find one, the error lists those available. Each webcam shows up as two `/dev/video*` devices: use the first.
+- `voz.py` and `dialogo.py` look for a Logitech C930e and fall back to the system microphone, with a warning.
+  Both print the microphone in use. Choose another with `--dispositivo <name>`, or list them with
+  `voz.py --listar`. Prefer a microphone close to the speaker: a noisy one detects speech poorly.
 
 ## 5. Start the stack (inside the container)
 

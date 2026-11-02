@@ -10,18 +10,18 @@ and by voice what it is doing and why.
 The code that runs on the lab's robot is in [`real_robot/`](real_robot/). To connect and install,
 follow [`real_robot/SETUP.md`](real_robot/SETUP.md).
 
-## Status (November 1, 2026)
+## Status (November 2, 2026)
 
 | Part | Status | Code |
 |---|---|---|
 | Robot control over UDP (speed, pause, vertical retreat, stop on lost link) | Works on the real robot | `real_robot/robot/` |
 | Soldering routine over a recorded PCB (grid of points, FK/IK) | Works on the real robot | `real_robot/robot/plan_placa.py` |
 | Keyboard supervisor with CSV logging | Works on the real robot | `real_robot/supervisor/supervisor_teclado.py` |
-| Facial expression to stress (GPU) | Tested with a live webcam, not yet driving the robot | `real_robot/percepcion/rostro.py` |
-| Voice emotion to stress (GPU), English model | Trained and tested on recorded audio, not yet with a live microphone | `real_robot/percepcion/voz.py` |
-| Trust index `T(t)` and NORMAL / CAUTIOUS / PAUSED state machine | Tested in simulation, not yet on the real robot | `real_robot/supervisor/` |
-| Operator screen | Tested in simulation, not yet on the real robot | `real_robot/pantalla/` |
-| Spoken dialogue and voice commands ("stop", "slow down") | Tested in simulation, not yet with a live microphone | `real_robot/dialogo/` |
+| Facial expression to stress (GPU) | Works live with a webcam, not yet driving the real robot | `real_robot/percepcion/rostro.py` |
+| Voice emotion to stress (GPU), English model | Works live with a microphone, not yet driving the real robot | `real_robot/percepcion/voz.py` |
+| Trust index `T(t)` and NORMAL / CAUTIOUS / PAUSED state machine | Works live with a simulated robot, not yet on the real robot | `real_robot/supervisor/` |
+| Operator screen | Works live with a simulated robot, not yet on the real robot | `real_robot/pantalla/` |
+| Spoken dialogue, task narration and voice commands ("stop", "slow down") | Works live with a simulated robot, not yet on the real robot | `real_robot/dialogo/` |
 | Hand detection | ROS 2 package, not integrated with the real robot | `aided_building_ws/src/aided_building_hand_perception/` |
 | Gazebo simulation of an FR3 | Simulation only | `aided_building_ws/` |
 
