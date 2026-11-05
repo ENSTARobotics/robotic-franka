@@ -111,7 +111,7 @@ cd ~/robotic-franka/real_robot      # or wherever you cloned it
 3. **Calibrate:** stay quiet for a few seconds. Then press `k` in the Supervisor tab, look at the camera and talk
    normally for 20 s. Repeat this for each person.
 4. **Start:** put the PCB in place, keep your hands off it and answer *yes* when the robot asks. The `a` key in the
-   Supervisor tab also starts it, without checking the PCB.
+   Supervisor tab also starts it. The first start calibrates if you have not done it and checks the PCB before moving.
 5. **Stop:** say *stop*, press `p` in the Supervisor tab, or use the emergency stop. Hands near the PCB also stop
    it and move it away; say *continue* once they are out.
 6. **Shut down:** `q` in Supervisor and Ctrl+C in Stack (or `./launch.sh --stop`). Then, in Desk, deactivate FCI
